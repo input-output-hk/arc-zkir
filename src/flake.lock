@@ -125,24 +125,11 @@
         "type": "github"
       }
     },
-    "pagda": {
-      "flake": false,
-      "locked": {
-        "path": "./pagda.nix",
-        "type": "path"
-      },
-      "original": {
-        "path": "./pagda.nix",
-        "type": "path"
-      },
-      "parent": []
-    },
     "root": {
       "inputs": {
         "agda-nix": "agda-nix",
         "flake-utils": "flake-utils_2",
-        "nixpkgs": "nixpkgs",
-        "pagda": "pagda"
+        "nixpkgs": "nixpkgs"
       }
     },
     "standard-library-classes": {
