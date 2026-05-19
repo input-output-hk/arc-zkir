@@ -13,10 +13,6 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    pagda = {
-      url = "./pagda.nix";
-      flake = false;
-    };
   };
 
   outputs =
@@ -39,7 +35,7 @@
             ];
           };
 
-          pagda = import inputs.pagda { agdaPackages = pkgs.agdaPackages; };
+          pagda = import ./pagda.nix { agdaPackages = pkgs.agdaPackages; };
         in
           {
             packages = pagda // {
