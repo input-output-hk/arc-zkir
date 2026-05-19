@@ -1,4 +1,4 @@
-module ZKIR.Syntax where
+module zkir-v3.Syntax where
 
 open import Data.Bool   using (Bool)
 open import Data.List   using (List)
@@ -48,6 +48,10 @@ data IrType : Set where
   -- ^ Point on the Jubjub elliptic curve.
   --   Serde name: "Point<Jubjub>"
 
+  jubjub-scalar : IrType
+  -- ^ Element of the scalar field of Jubjub.
+  --   Serde name: "Scalar<Jubjub>"
+
 ------------------------------------------------------------------------
 -- Typed identifier  (ir.rs: TypedIdentifier)
 --
@@ -77,7 +81,7 @@ data Operand : Set where
 ------------------------------------------------------------------------
 -- Instructions  (ir.rs: Instruction)
 --
--- The 24 variants appear in the same order as in the Rust source.
+-- The 26 variants appear in the same order as in the Rust source.
 -- Field names follow the Rust names, with underscores replaced by
 -- hyphens and 'val_t' spelled as 'val-t'.
 --
@@ -210,6 +214,14 @@ data Instruction : Set where
     → (outputs   : List Identifier)
     → Instruction
 
+  -- Keccak-256 hash with alignment metadata.
+  -- Exactly 2 outputs (binary format).
+  keccak256
+    : (alignment : Alignment)
+    → (inputs    : List Operand)
+    → (outputs   : List Identifier)
+    → Instruction
+
   -- Test equality.  Output is 1 iff a = b.
   test-eq
     : (a b    : Operand)
@@ -254,6 +266,7 @@ data Instruction : Set where
   -- Outputs 0 if the guard condition fails (or is absent).
   public-input
     : (guard  : Maybe Operand)
+    → (val-t  : IrType)
     → (output : Identifier)
     → Instruction
 
@@ -261,6 +274,7 @@ data Instruction : Set where
   -- Outputs 0 if the guard condition fails (or is absent).
   private-input
     : (guard  : Maybe Operand)
+    → (val-t  : IrType)
     → (output : Identifier)
     → Instruction
 
