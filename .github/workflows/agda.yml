@@ -1,0 +1,23 @@
+name: Check Agda
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Typecheck Agda
+        run: |
+          cd src
+          nix run .#agda -- zkir-v2/Syntax.agda
+          nix run .#agda -- zkir-v3/Syntax.agda
