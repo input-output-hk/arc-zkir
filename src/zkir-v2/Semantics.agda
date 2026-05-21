@@ -52,11 +52,11 @@ postulate
 -- Utilities
 ------------------------------------------------------------------------
 
-private
-  from-bool : Bool → Fr
-  from-bool false = 0ᶠ
-  from-bool true  = 1ᶠ
+from-bool : Bool → Fr
+from-bool false = 0ᶠ
+from-bool true  = 1ᶠ
 
+private
   all-false : List Bool → Bool
   all-false []       = true
   all-false (b ∷ bs) = Bool.not b ∧ all-false bs
@@ -66,21 +66,22 @@ private
   (x ∷ xs) ≡ᶠ-list? (y ∷ ys) = x ≡ᶠ? y ∧ xs ≡ᶠ-list? ys
   _        ≡ᶠ-list? _        = false
 
-  -- bits-lt as bs: true iff the natural number represented by as (LE) is < that
-  -- of bs.  Assumes both lists have the same length.
-  bits-lt : List Bool → List Bool → Bool
-  bits-lt as bs = go (reverse as) (reverse bs)
-    where
-      go : List Bool → List Bool → Bool
-      go []          _           = false
-      go _           []          = false
-      go (false ∷ _) (true ∷ _) = true
-      go (true ∷ _)  (false ∷ _) = false
-      go (_ ∷ as')   (_ ∷ bs')  = go as' bs'
 
   is-empty : {A : Set} → List A → Bool
   is-empty []      = true
   is-empty (_ ∷ _) = false
+
+-- bits-lt as bs: true iff the natural number represented by as (LE) is < that
+-- of bs.  Assumes both lists have the same length.
+bits-lt : List Bool → List Bool → Bool
+bits-lt as bs = go (reverse as) (reverse bs)
+  where
+    go : List Bool → List Bool → Bool
+    go []          _           = false
+    go _           []          = false
+    go (false ∷ _) (true ∷ _) = true
+    go (true ∷ _)  (false ∷ _) = false
+    go (_ ∷ as')   (_ ∷ bs')  = go as' bs'
 
 -- Convert Fr to Bool; nothing if not in {0, 1} (UB in the IR)
 to-bool : Fr → Maybe Bool
