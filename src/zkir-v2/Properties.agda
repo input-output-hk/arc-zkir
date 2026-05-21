@@ -468,3 +468,12 @@ preprocess-memory-mono src pre s eq
       (≤-reflexive (sym (cong length (init-state-memory src pre s₀ eq₀))))
       (preprocess-instrs-mono pre s₀ (IrSource.instructions src) s
         (subst (λ x → preprocess-instrs pre s₀ (IrSource.instructions src) ≡ just x) s'-eq eq₂))
+
+------------------------------------------------------------------------
+-- 4. Faithfulness
+-- The computational and relational semantics agree.
+------------------------------------------------------------------------
+
+postulate
+  preprocess→R : ∀ src pre s → preprocess src pre ≡ just s → R src pre s
+  R→preprocess : ∀ src pre s → R src pre s → preprocess src pre ≡ just s

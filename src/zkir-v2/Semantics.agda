@@ -6,7 +6,8 @@ open import Data.Bool    using (Bool; true; false; if_then_else_; _∧_; _∨_)
 import Data.Bool as Bool
 open import Data.List    using (List; []; _∷_; _++_; length; drop; take; reverse)
 open import Data.Maybe   using (Maybe; nothing; just; _>>=_; maybe)
-open import Data.Product using (_×_; _,_)
+open import Data.Product using (_×_; _,_; ∃)
+open import Relation.Binary.PropositionalEquality using (_≡_)
 open import Data.Nat     using (ℕ; zero; suc; _∸_; _≡ᵇ_)
 
 ------------------------------------------------------------------------
@@ -436,3 +437,182 @@ preprocess src pre =
   if transcripts-consumed pre s' ∧ comm-ok src pre s'
     then just s'
     else nothing
+
+------------------------------------------------------------------------
+-- Relational semantics
+--
+-- R-instr pre s i s' holds when instruction i can validly transition
+-- from state s to state s', given preimage pre.  Defined independently
+-- of preprocess-instr; faithfulness connects the two.
+------------------------------------------------------------------------
+
+data R-instr (pre : ProofPreimage)
+    : Preprocessed → Instruction → Preprocessed → Set where
+
+  r-assert : ∀ {s cond}
+    → (mem-lookup (Preprocessed.memory s) cond >>= to-bool) ≡ just true
+    → R-instr pre s (assert cond) s
+
+  r-cond-select : ∀ {s bit a b sel av bv}
+    → (mem-lookup (Preprocessed.memory s) bit >>= to-bool) ≡ just sel
+    → mem-lookup (Preprocessed.memory s) a ≡ just av
+    → mem-lookup (Preprocessed.memory s) b ≡ just bv
+    → R-instr pre s (cond-select bit a b) (push-mem s (if sel then av else bv))
+
+  r-constrain-bits : ∀ {s var bits v}
+    → mem-lookup (Preprocessed.memory s) var ≡ just v
+    → fits-in v bits ≡ true
+    → R-instr pre s (constrain-bits var bits) s
+
+  r-constrain-eq : ∀ {s a b av bv}
+    → mem-lookup (Preprocessed.memory s) a ≡ just av
+    → mem-lookup (Preprocessed.memory s) b ≡ just bv
+    → av ≡ᶠ? bv ≡ true
+    → R-instr pre s (constrain-eq a b) s
+
+  r-constrain-to-boolean : ∀ {s var b}
+    → (mem-lookup (Preprocessed.memory s) var >>= to-bool) ≡ just b
+    → R-instr pre s (constrain-to-boolean var) s
+
+  r-copy : ∀ {s var v}
+    → mem-lookup (Preprocessed.memory s) var ≡ just v
+    → R-instr pre s (copy var) (push-mem s v)
+
+  r-declare-pub-input : ∀ {s var v}
+    → mem-lookup (Preprocessed.memory s) var ≡ just v
+    → R-instr pre s (declare-pub-input var) (push-pi s v)
+
+  r-pi-skip-active : ∀ {s guard count}
+    → eval-guard (Preprocessed.memory s) guard ≡ just true
+    → (drop (length (Preprocessed.pis s) ∸ count) (Preprocessed.pis s)
+         ≡ᶠ-list? take count (drop (Preprocessed.pub-in-idx s ∸ count)
+                                    (ProofPreimage.pub-transcript-inputs pre)))
+       ≡ true
+    → R-instr pre s (pi-skip guard count) (push-skip s nothing)
+
+  r-pi-skip-inactive : ∀ {s guard count}
+    → eval-guard (Preprocessed.memory s) guard ≡ just false
+    → R-instr pre s (pi-skip guard count)
+        (push-skip (record s { pub-in-idx = Preprocessed.pub-in-idx s ∸ count }) (just count))
+
+  r-ec-add : ∀ {s a_x a_y b_x b_y ax ay bx by cx cy}
+    → mem-lookup (Preprocessed.memory s) a_x ≡ just ax
+    → mem-lookup (Preprocessed.memory s) a_y ≡ just ay
+    → mem-lookup (Preprocessed.memory s) b_x ≡ just bx
+    → mem-lookup (Preprocessed.memory s) b_y ≡ just by
+    → ec-add-pts ax ay bx by ≡ just (cx , cy)
+    → R-instr pre s (ec-add a_x a_y b_x b_y) (push-mem2 s cx cy)
+
+  r-ec-mul : ∀ {s a_x a_y scalar ax ay sc cx cy}
+    → mem-lookup (Preprocessed.memory s) a_x ≡ just ax
+    → mem-lookup (Preprocessed.memory s) a_y ≡ just ay
+    → mem-lookup (Preprocessed.memory s) scalar ≡ just sc
+    → ec-mul-pt ax ay sc ≡ just (cx , cy)
+    → R-instr pre s (ec-mul a_x a_y scalar) (push-mem2 s cx cy)
+
+  r-ec-mul-generator : ∀ {s scalar sc cx cy}
+    → mem-lookup (Preprocessed.memory s) scalar ≡ just sc
+    → ec-mul-gen sc ≡ (cx , cy)
+    → R-instr pre s (ec-mul-generator scalar) (push-mem2 s cx cy)
+
+  r-hash-to-curve : ∀ {s inputs vs cx cy}
+    → mem-lookups (Preprocessed.memory s) inputs ≡ just vs
+    → hash-to-curve-fn vs ≡ (cx , cy)
+    → R-instr pre s (hash-to-curve inputs) (push-mem2 s cx cy)
+
+  r-load-imm : ∀ {s imm}
+    → R-instr pre s (load-imm imm) (push-mem s imm)
+
+  r-div-mod-power-of-two : ∀ {s var bits v}
+    → mem-lookup (Preprocessed.memory s) var ≡ just v
+    → R-instr pre s (div-mod-power-of-two var bits)
+        (push-mem (push-mem s (from-le-bits (drop bits (to-le-bits v))))
+                  (from-le-bits (take bits (to-le-bits v))))
+
+  r-reconstitute-field : ∀ {s divisor modulus bits dv mv}
+    → mem-lookup (Preprocessed.memory s) divisor ≡ just dv
+    → mem-lookup (Preprocessed.memory s) modulus ≡ just mv
+    → (fits-in mv bits ∧ fits-in dv (FR-BITS ∸ bits) ∧
+       bits-in-field (take bits (to-le-bits mv) ++ take (FR-BITS ∸ bits) (to-le-bits dv))) ≡ true
+    → R-instr pre s (reconstitute-field divisor modulus bits)
+        (push-mem s (from-le-bits (take bits (to-le-bits mv) ++ take (FR-BITS ∸ bits) (to-le-bits dv))))
+
+  r-output : ∀ {s var v}
+    → mem-lookup (Preprocessed.memory s) var ≡ just v
+    → R-instr pre s (output var) (push-output s v)
+
+  r-transient-hash : ∀ {s inputs vs}
+    → mem-lookups (Preprocessed.memory s) inputs ≡ just vs
+    → R-instr pre s (transient-hash inputs) (push-mem s (transient-hash-fn vs))
+
+  r-persistent-hash : ∀ {s alignment inputs vs h₁ h₂}
+    → mem-lookups (Preprocessed.memory s) inputs ≡ just vs
+    → persistent-hash-fn alignment vs ≡ (h₁ , h₂)
+    → R-instr pre s (persistent-hash alignment inputs) (push-mem2 s h₁ h₂)
+
+  r-test-eq : ∀ {s a b av bv}
+    → mem-lookup (Preprocessed.memory s) a ≡ just av
+    → mem-lookup (Preprocessed.memory s) b ≡ just bv
+    → R-instr pre s (test-eq a b) (push-mem s (from-bool (av ≡ᶠ? bv)))
+
+  r-add : ∀ {s a b av bv}
+    → mem-lookup (Preprocessed.memory s) a ≡ just av
+    → mem-lookup (Preprocessed.memory s) b ≡ just bv
+    → R-instr pre s (add a b) (push-mem s (av +ᶠ bv))
+
+  r-mul : ∀ {s a b av bv}
+    → mem-lookup (Preprocessed.memory s) a ≡ just av
+    → mem-lookup (Preprocessed.memory s) b ≡ just bv
+    → R-instr pre s (mul a b) (push-mem s (av *ᶠ bv))
+
+  r-neg : ∀ {s a av}
+    → mem-lookup (Preprocessed.memory s) a ≡ just av
+    → R-instr pre s (neg a) (push-mem s (-ᶠ av))
+
+  r-not : ∀ {s a b}
+    → (mem-lookup (Preprocessed.memory s) a >>= to-bool) ≡ just b
+    → R-instr pre s (not a) (push-mem s (from-bool (Bool.not b)))
+
+  r-less-than : ∀ {s a b bits av bv}
+    → mem-lookup (Preprocessed.memory s) a ≡ just av
+    → mem-lookup (Preprocessed.memory s) b ≡ just bv
+    → (fits-in av bits ∧ fits-in bv bits) ≡ true
+    → R-instr pre s (less-than a b bits)
+        (push-mem s (from-bool (bits-lt (take bits (to-le-bits av))
+                                        (take bits (to-le-bits bv)))))
+
+  r-public-input-inactive : ∀ {s guard}
+    → eval-guard (Preprocessed.memory s) guard ≡ just false
+    → R-instr pre s (public-input guard) (push-mem s 0ᶠ)
+
+  r-public-input-active : ∀ {s guard v s₁}
+    → eval-guard (Preprocessed.memory s) guard ≡ just true
+    → consume-pub-out s ≡ just (v , s₁)
+    → R-instr pre s (public-input guard) (push-mem s₁ v)
+
+  r-private-input-inactive : ∀ {s guard}
+    → eval-guard (Preprocessed.memory s) guard ≡ just false
+    → R-instr pre s (private-input guard) (push-mem s 0ᶠ)
+
+  r-private-input-active : ∀ {s guard v s₁}
+    → eval-guard (Preprocessed.memory s) guard ≡ just true
+    → consume-priv s ≡ just (v , s₁)
+    → R-instr pre s (private-input guard) (push-mem s₁ v)
+
+-- Relational semantics for a sequence of instructions.
+data R-instrs (pre : ProofPreimage)
+    : Preprocessed → List Instruction → Preprocessed → Set where
+  r-done : ∀ {s} → R-instrs pre s [] s
+  r-step : ∀ {s s₁ s' i is}
+    → R-instr  pre s  i  s₁
+    → R-instrs pre s₁ is s'
+    → R-instrs pre s (i ∷ is) s'
+
+-- Top-level relational semantics: pre and s satisfy circuit src.
+R : IrSource → ProofPreimage → Preprocessed → Set
+R src pre s =
+  ∃ λ s₀ →
+    init-state src pre ≡ just s₀ ×
+    R-instrs pre s₀ (IrSource.instructions src) s ×
+    transcripts-consumed pre s ≡ true ×
+    comm-ok src pre s ≡ true
