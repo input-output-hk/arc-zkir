@@ -124,7 +124,7 @@ record ProofPreimage : Set where
 -- Execution state
 ------------------------------------------------------------------------
 
-record ExecState : Set where
+record Preprocessed : Set where
   constructor mk-state
   field
     memory      : List Fr
@@ -141,7 +141,7 @@ record ExecState : Set where
 -- Fails if do-communications-commitment is set but no commitment is provided.
 ------------------------------------------------------------------------
 
-init-state : IrSource → ProofPreimage → Maybe ExecState
+init-state : IrSource → ProofPreimage → Maybe Preprocessed
 init-state src pre
   with IrSource.do-communications-commitment src
      | ProofPreimage.comm-commitment pre
@@ -165,33 +165,33 @@ init-state src pre
 -- State helpers
 ------------------------------------------------------------------------
 
-push-mem : ExecState → Fr → ExecState
-push-mem s v = record s { memory = ExecState.memory s ++ (v ∷ []) }
+push-mem : Preprocessed → Fr → Preprocessed
+push-mem s v = record s { memory = Preprocessed.memory s ++ (v ∷ []) }
 
-push-mem2 : ExecState → Fr → Fr → ExecState
-push-mem2 s v₁ v₂ = record s { memory = ExecState.memory s ++ (v₁ ∷ v₂ ∷ []) }
+push-mem2 : Preprocessed → Fr → Fr → Preprocessed
+push-mem2 s v₁ v₂ = record s { memory = Preprocessed.memory s ++ (v₁ ∷ v₂ ∷ []) }
 
-consume-pub-out : ExecState → Maybe (Fr × ExecState)
-consume-pub-out s with ExecState.pub-out-rem s
+consume-pub-out : Preprocessed → Maybe (Fr × Preprocessed)
+consume-pub-out s with Preprocessed.pub-out-rem s
 ... | []       = nothing
 ... | v ∷ rest = just (v , record s { pub-out-rem = rest })
 
-consume-priv : ExecState → Maybe (Fr × ExecState)
-consume-priv s with ExecState.priv-rem s
+consume-priv : Preprocessed → Maybe (Fr × Preprocessed)
+consume-priv s with Preprocessed.priv-rem s
 ... | []       = nothing
 ... | v ∷ rest = just (v , record s { priv-rem = rest })
 
 private
-  push-pi : ExecState → Fr → ExecState
+  push-pi : Preprocessed → Fr → Preprocessed
   push-pi s v = record s
-    { pis        = ExecState.pis s ++ (v ∷ [])
-    ; pub-in-idx = suc (ExecState.pub-in-idx s) }
+    { pis        = Preprocessed.pis s ++ (v ∷ [])
+    ; pub-in-idx = suc (Preprocessed.pub-in-idx s) }
 
-  push-skip : ExecState → Maybe ℕ → ExecState
-  push-skip s sk = record s { pi-skips = ExecState.pi-skips s ++ (sk ∷ []) }
+  push-skip : Preprocessed → Maybe ℕ → Preprocessed
+  push-skip s sk = record s { pi-skips = Preprocessed.pi-skips s ++ (sk ∷ []) }
 
-  push-output : ExecState → Fr → ExecState
-  push-output s v = record s { outputs = ExecState.outputs s ++ (v ∷ []) }
+  push-output : Preprocessed → Fr → Preprocessed
+  push-output s v = record s { outputs = Preprocessed.outputs s ++ (v ∷ []) }
 
 ------------------------------------------------------------------------
 -- Guard evaluation
@@ -214,73 +214,73 @@ eval-guard mem (just idx) = mem-lookup mem idx >>= to-bool
 ------------------------------------------------------------------------
 
 private
-  exec-pi-skip : ProofPreimage → ExecState → Maybe Index → ℕ → Maybe ExecState
-  exec-pi-skip pre s guard count =
-    eval-guard (ExecState.memory s) guard >>= λ active →
+  preprocess-pi-skip : ProofPreimage → Preprocessed → Maybe Index → ℕ → Maybe Preprocessed
+  preprocess-pi-skip pre s guard count =
+    eval-guard (Preprocessed.memory s) guard >>= λ active →
     if active then validate else skip
     where
-      validate : Maybe ExecState
+      validate : Maybe Preprocessed
       validate =
         let
-          pis      = ExecState.pis s
+          pis      = Preprocessed.pis s
           recent   = drop (length pis ∸ count) pis
-          start    = ExecState.pub-in-idx s ∸ count
+          start    = Preprocessed.pub-in-idx s ∸ count
           expected = take count (drop start (ProofPreimage.pub-transcript-inputs pre))
         in
         if recent ≡ᶠ-list? expected
           then just (push-skip s nothing)
           else nothing
 
-      skip : Maybe ExecState
+      skip : Maybe Preprocessed
       skip = just (push-skip
-        (record s { pub-in-idx = ExecState.pub-in-idx s ∸ count })
+        (record s { pub-in-idx = Preprocessed.pub-in-idx s ∸ count })
         (just count))
 
 ------------------------------------------------------------------------
--- Single-instruction execution
+-- Single-instruction preprocessing
 -- Returns nothing on out-of-bounds access, UB, or constraint failure.
 ------------------------------------------------------------------------
 
-exec-instr : ProofPreimage → ExecState → Instruction → Maybe ExecState
+preprocess-instr : ProofPreimage → Preprocessed → Instruction → Maybe Preprocessed
 
-exec-instr _ s (assert cond) =
-  mem-lookup (ExecState.memory s) cond >>= to-bool >>= λ b →
+preprocess-instr _ s (assert cond) =
+  mem-lookup (Preprocessed.memory s) cond >>= to-bool >>= λ b →
   if b then just s else nothing
 
-exec-instr _ s (cond-select bit a b) =
-  let mem = ExecState.memory s in
+preprocess-instr _ s (cond-select bit a b) =
+  let mem = Preprocessed.memory s in
   mem-lookup mem bit >>= to-bool >>= λ bv →
   mem-lookup mem a   >>= λ av   →
   mem-lookup mem b   >>= λ bv'  →
   just (push-mem s (if bv then av else bv'))
 
-exec-instr _ s (constrain-bits var bits) =
-  mem-lookup (ExecState.memory s) var >>= λ v →
+preprocess-instr _ s (constrain-bits var bits) =
+  mem-lookup (Preprocessed.memory s) var >>= λ v →
   if fits-in v bits then just s else nothing
 
-exec-instr _ s (constrain-eq a b) =
-  let mem = ExecState.memory s in
+preprocess-instr _ s (constrain-eq a b) =
+  let mem = Preprocessed.memory s in
   mem-lookup mem a >>= λ av →
   mem-lookup mem b >>= λ bv →
   if av ≡ᶠ? bv then just s else nothing
 
-exec-instr _ s (constrain-to-boolean var) =
-  mem-lookup (ExecState.memory s) var >>= to-bool >>= λ _ →
+preprocess-instr _ s (constrain-to-boolean var) =
+  mem-lookup (Preprocessed.memory s) var >>= to-bool >>= λ _ →
   just s
 
-exec-instr _ s (copy var) =
-  mem-lookup (ExecState.memory s) var >>= λ v →
+preprocess-instr _ s (copy var) =
+  mem-lookup (Preprocessed.memory s) var >>= λ v →
   just (push-mem s v)
 
-exec-instr _ s (declare-pub-input var) =
-  mem-lookup (ExecState.memory s) var >>= λ v →
+preprocess-instr _ s (declare-pub-input var) =
+  mem-lookup (Preprocessed.memory s) var >>= λ v →
   just (push-pi s v)
 
-exec-instr pre s (pi-skip guard count) =
-  exec-pi-skip pre s guard count
+preprocess-instr pre s (pi-skip guard count) =
+  preprocess-pi-skip pre s guard count
 
-exec-instr _ s (ec-add a_x a_y b_x b_y) =
-  let mem = ExecState.memory s in
+preprocess-instr _ s (ec-add a_x a_y b_x b_y) =
+  let mem = Preprocessed.memory s in
   mem-lookup mem a_x >>= λ ax →
   mem-lookup mem a_y >>= λ ay →
   mem-lookup mem b_x >>= λ bx →
@@ -288,29 +288,29 @@ exec-instr _ s (ec-add a_x a_y b_x b_y) =
   ec-add-pts ax ay bx by >>= λ { (cx , cy) →
   just (push-mem2 s cx cy) }
 
-exec-instr _ s (ec-mul a_x a_y scalar) =
-  let mem = ExecState.memory s in
+preprocess-instr _ s (ec-mul a_x a_y scalar) =
+  let mem = Preprocessed.memory s in
   mem-lookup mem a_x    >>= λ ax →
   mem-lookup mem a_y    >>= λ ay →
   mem-lookup mem scalar >>= λ sc →
   ec-mul-pt ax ay sc >>= λ { (cx , cy) →
   just (push-mem2 s cx cy) }
 
-exec-instr _ s (ec-mul-generator scalar) =
-  mem-lookup (ExecState.memory s) scalar >>= λ sc →
+preprocess-instr _ s (ec-mul-generator scalar) =
+  mem-lookup (Preprocessed.memory s) scalar >>= λ sc →
   let (cx , cy) = ec-mul-gen sc in
   just (push-mem2 s cx cy)
 
-exec-instr _ s (hash-to-curve inputs) =
-  mem-lookups (ExecState.memory s) inputs >>= λ vs →
+preprocess-instr _ s (hash-to-curve inputs) =
+  mem-lookups (Preprocessed.memory s) inputs >>= λ vs →
   let (cx , cy) = hash-to-curve-fn vs in
   just (push-mem2 s cx cy)
 
-exec-instr _ s (load-imm imm) =
+preprocess-instr _ s (load-imm imm) =
   just (push-mem s imm)
 
-exec-instr _ s (div-mod-power-of-two var bits) =
-  mem-lookup (ExecState.memory s) var >>= λ v →
+preprocess-instr _ s (div-mod-power-of-two var bits) =
+  mem-lookup (Preprocessed.memory s) var >>= λ v →
   let
     all-bits = to-le-bits v
     divisor  = from-le-bits (drop bits all-bits)
@@ -320,13 +320,13 @@ exec-instr _ s (div-mod-power-of-two var bits) =
 
 -- NB: the comment in Syntax.agda says "1 output" but persistent-hash produces
 -- 2 field elements, consistent with zkir-v3.Syntax and the Rust VM.
-exec-instr _ s (persistent-hash alignment inputs) =
-  mem-lookups (ExecState.memory s) inputs >>= λ vs →
+preprocess-instr _ s (persistent-hash alignment inputs) =
+  mem-lookups (Preprocessed.memory s) inputs >>= λ vs →
   let (h₁ , h₂) = persistent-hash-fn alignment vs in
   just (push-mem2 s h₁ h₂)
 
-exec-instr _ s (reconstitute-field divisor modulus bits) =
-  let mem = ExecState.memory s in
+preprocess-instr _ s (reconstitute-field divisor modulus bits) =
+  let mem = Preprocessed.memory s in
   mem-lookup mem divisor >>= λ dv →
   mem-lookup mem modulus >>= λ mv →
   let
@@ -338,42 +338,42 @@ exec-instr _ s (reconstitute-field divisor modulus bits) =
     then just (push-mem s (from-le-bits all-bits))
     else nothing
 
-exec-instr _ s (output var) =
-  mem-lookup (ExecState.memory s) var >>= λ v →
+preprocess-instr _ s (output var) =
+  mem-lookup (Preprocessed.memory s) var >>= λ v →
   just (push-output s v)
 
-exec-instr _ s (transient-hash inputs) =
-  mem-lookups (ExecState.memory s) inputs >>= λ vs →
+preprocess-instr _ s (transient-hash inputs) =
+  mem-lookups (Preprocessed.memory s) inputs >>= λ vs →
   just (push-mem s (transient-hash-fn vs))
 
-exec-instr _ s (test-eq a b) =
-  let mem = ExecState.memory s in
+preprocess-instr _ s (test-eq a b) =
+  let mem = Preprocessed.memory s in
   mem-lookup mem a >>= λ av →
   mem-lookup mem b >>= λ bv →
   just (push-mem s (from-bool (av ≡ᶠ? bv)))
 
-exec-instr _ s (add a b) =
-  let mem = ExecState.memory s in
+preprocess-instr _ s (add a b) =
+  let mem = Preprocessed.memory s in
   mem-lookup mem a >>= λ av →
   mem-lookup mem b >>= λ bv →
   just (push-mem s (av +ᶠ bv))
 
-exec-instr _ s (mul a b) =
-  let mem = ExecState.memory s in
+preprocess-instr _ s (mul a b) =
+  let mem = Preprocessed.memory s in
   mem-lookup mem a >>= λ av →
   mem-lookup mem b >>= λ bv →
   just (push-mem s (av *ᶠ bv))
 
-exec-instr _ s (neg a) =
-  mem-lookup (ExecState.memory s) a >>= λ av →
+preprocess-instr _ s (neg a) =
+  mem-lookup (Preprocessed.memory s) a >>= λ av →
   just (push-mem s (-ᶠ av))
 
-exec-instr _ s (not a) =
-  mem-lookup (ExecState.memory s) a >>= to-bool >>= λ b →
+preprocess-instr _ s (not a) =
+  mem-lookup (Preprocessed.memory s) a >>= to-bool >>= λ b →
   just (push-mem s (from-bool (Bool.not b)))
 
-exec-instr _ s (less-than a b bits) =
-  let mem = ExecState.memory s in
+preprocess-instr _ s (less-than a b bits) =
+  let mem = Preprocessed.memory s in
   mem-lookup mem a >>= λ av →
   mem-lookup mem b >>= λ bv →
   if fits-in av bits ∧ fits-in bv bits
@@ -382,57 +382,57 @@ exec-instr _ s (less-than a b bits) =
                     (take bits (to-le-bits bv)))))
     else nothing
 
-exec-instr pre s (public-input guard) =
-  eval-guard (ExecState.memory s) guard >>= λ active →
+preprocess-instr pre s (public-input guard) =
+  eval-guard (Preprocessed.memory s) guard >>= λ active →
   if Bool.not active
     then just (push-mem s 0ᶠ)
     else consume-pub-out s >>= λ { (v , s') → just (push-mem s' v) }
 
-exec-instr pre s (private-input guard) =
-  eval-guard (ExecState.memory s) guard >>= λ active →
+preprocess-instr pre s (private-input guard) =
+  eval-guard (Preprocessed.memory s) guard >>= λ active →
   if Bool.not active
     then just (push-mem s 0ᶠ)
     else consume-priv s >>= λ { (v , s') → just (push-mem s' v) }
 
 ------------------------------------------------------------------------
--- Circuit execution: fold exec-instr over the instruction list
+-- Circuit preprocessing: fold preprocess-instr over the instruction list
 ------------------------------------------------------------------------
 
-exec-instrs : ProofPreimage → ExecState → List Instruction → Maybe ExecState
-exec-instrs _   s []       = just s
-exec-instrs pre s (i ∷ is) =
-  exec-instr pre s i >>= λ s' →
-  exec-instrs pre s' is
+preprocess-instrs : ProofPreimage → Preprocessed → List Instruction → Maybe Preprocessed
+preprocess-instrs _   s []       = just s
+preprocess-instrs pre s (i ∷ is) =
+  preprocess-instr pre s i >>= λ s' →
+  preprocess-instrs pre s' is
 
 ------------------------------------------------------------------------
--- Post-execution validation
+-- Post-preprocessing validation
 ------------------------------------------------------------------------
 
 -- All three transcripts must be fully consumed.
-transcripts-consumed : ProofPreimage → ExecState → Bool
+transcripts-consumed : ProofPreimage → Preprocessed → Bool
 transcripts-consumed pre s =
-  (length (ProofPreimage.pub-transcript-inputs pre) ≡ᵇ ExecState.pub-in-idx s)
-  ∧ is-empty (ExecState.pub-out-rem s)
-  ∧ is-empty (ExecState.priv-rem s)
+  (length (ProofPreimage.pub-transcript-inputs pre) ≡ᵇ Preprocessed.pub-in-idx s)
+  ∧ is-empty (Preprocessed.pub-out-rem s)
+  ∧ is-empty (Preprocessed.priv-rem s)
 
 -- If do-communications-commitment is set, verify the commitment.
-comm-ok : IrSource → ProofPreimage → ExecState → Bool
+comm-ok : IrSource → ProofPreimage → Preprocessed → Bool
 comm-ok src pre s
   with IrSource.do-communications-commitment src
      | ProofPreimage.comm-commitment pre
 ... | false | _            = true
 ... | true  | nothing      = false
 ... | true  | just (c , r) =
-  c ≡ᶠ? transient-commit (ProofPreimage.inputs pre ++ ExecState.outputs s) r
+  c ≡ᶠ? transient-commit (ProofPreimage.inputs pre ++ Preprocessed.outputs s) r
 
 ------------------------------------------------------------------------
--- Top-level: run the circuit and validate
+-- Top-level: preprocess the circuit and validate
 ------------------------------------------------------------------------
 
-exec : IrSource → ProofPreimage → Maybe ExecState
-exec src pre =
+preprocess : IrSource → ProofPreimage → Maybe Preprocessed
+preprocess src pre =
   init-state src pre                           >>= λ s  →
-  exec-instrs pre s (IrSource.instructions src) >>= λ s' →
+  preprocess-instrs pre s (IrSource.instructions src) >>= λ s' →
   if transcripts-consumed pre s' ∧ comm-ok src pre s'
     then just s'
     else nothing
