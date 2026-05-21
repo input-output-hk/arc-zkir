@@ -13,6 +13,7 @@ open import Data.Product using (_×_; _,_; ∃; proj₂)
 open import Data.Maybe.Properties using (just-injective)
 open import Relation.Binary.PropositionalEquality
   using (_≡_; refl; sym; cong; subst)
+open import Function.Bundles using (_↔_)
 
 ------------------------------------------------------------------------
 -- Local proof helpers
@@ -921,3 +922,19 @@ R→preprocess : ∀ src pre s → R src pre s → preprocess src pre ≡ just s
 R→preprocess src pre s (s₀ , init-eq , ris , tc , co)
   with R-instrs→preprocess-instrs pre s₀ (IrSource.instructions src) s ris
 ... | instrs-eq rewrite init-eq | instrs-eq | tc | co = refl
+
+------------------------------------------------------------------------
+-- 5. Circuit correctness
+-- The Halo2 constraint synthesis (circuit) is faithful to R.
+-- A full proof requires modelling the polynomial constraint system.
+------------------------------------------------------------------------
+
+postulate
+  -- An opaque type for the Halo2 constraint system produced by circuit.
+  ConstraintSystem : Set
+  -- circuit produces a constraint system from source and preimage.
+  circuit : IrSource → ProofPreimage → ConstraintSystem
+  -- A preprocessed state satisfies a constraint system.
+  satisfies : ConstraintSystem → Preprocessed → Set
+  -- circuit is faithful to the relational semantics.
+  circuit-faithful : ∀ src pre s → R src pre s ↔ satisfies (circuit src pre) s
