@@ -76,6 +76,23 @@ private
   length-++-one []       _ = refl
   length-++-one (_ ∷ xs) x = cong suc (length-++-one xs x)
 
+  -- consume-pub-out and consume-priv only change the transcript fields, not memory.
+  consume-pub-out-mem : ∀ (s : Preprocessed) v s₁
+    → consume-pub-out s ≡ just (v , s₁)
+    → Preprocessed.memory s₁ ≡ Preprocessed.memory s
+  consume-pub-out-mem s v s₁ eq
+    with Preprocessed.pub-out-rem s | eq
+  ... | []     | ()
+  ... | _ ∷ _  | p = sym (cong Preprocessed.memory (cong proj₂ (just-injective p)))
+
+  consume-priv-mem : ∀ (s : Preprocessed) v s₁
+    → consume-priv s ≡ just (v , s₁)
+    → Preprocessed.memory s₁ ≡ Preprocessed.memory s
+  consume-priv-mem s v s₁ eq
+    with Preprocessed.priv-rem s | eq
+  ... | []     | ()
+  ... | _ ∷ _  | p = sym (cong Preprocessed.memory (cong proj₂ (just-injective p)))
+
 ------------------------------------------------------------------------
 -- Gate: a polynomial constraint over memory positions.
 --
@@ -259,14 +276,14 @@ gate-holds mem (gate-public-input r guard) =
   ∃ λ v →
     mem-lookup mem r ≡ just v ×
     (∀ i → guard ≡ just i →
-       ∃ λ b → mem-lookup mem i ≡ just (from-bool b) ×
+       ∃ λ b → (mem-lookup mem i >>= to-bool) ≡ just b ×
                (b ≡ false → v ≡ 0ᶠ))
 
 gate-holds mem (gate-private-input r guard) =
   ∃ λ v →
     mem-lookup mem r ≡ just v ×
     (∀ i → guard ≡ just i →
-       ∃ λ b → mem-lookup mem i ≡ just (from-bool b) ×
+       ∃ λ b → (mem-lookup mem i >>= to-bool) ≡ just b ×
                (b ≡ false → v ≡ 0ᶠ))
 
 gate-holds mem (gate-pi-skip guard count) = ⊤
@@ -375,13 +392,13 @@ gate-holds-monotone (gate-reconstitute r d m bits) mem extra (dv , mv , ld , lm 
 gate-holds-monotone (gate-public-input r guard) mem extra (v , lv , gd) =
   v ,
   mem-lookup-append mem r v extra lv ,
-  λ i eq → let (b , li , cond) = gd i eq
-            in b , mem-lookup-append mem i _ extra li , cond
+  λ i eq → let (b , lb , cond) = gd i eq
+            in b , mem->>=append to-bool mem i extra lb , cond
 gate-holds-monotone (gate-private-input r guard) mem extra (v , lv , gd) =
   v ,
   mem-lookup-append mem r v extra lv ,
-  λ i eq → let (b , li , cond) = gd i eq
-            in b , mem-lookup-append mem i _ extra li , cond
+  λ i eq → let (b , lb , cond) = gd i eq
+            in b , mem->>=append to-bool mem i extra lb , cond
 gate-holds-monotone (gate-pi-skip guard count) mem extra _ = tt
 
 ------------------------------------------------------------------------
@@ -394,7 +411,7 @@ private
 
 circuit-instr-gates : ProofPreimage → Preprocessed → Instruction → List Gate
 circuit-instr-gates _   s (assert cond)                   = gate-assert-nonzero cond ∷ []
-circuit-instr-gates _   s (cond-select bit a b)           = gate-boolean (n s) ∷ []
+circuit-instr-gates _   s (cond-select bit a b)           = gate-boolean bit ∷ []
 circuit-instr-gates _   s (constrain-bits var bits)       = gate-constrain-bits var bits ∷ []
 circuit-instr-gates _   s (constrain-eq a b)              = gate-constrain-eq a b ∷ []
 circuit-instr-gates _   s (constrain-to-boolean var)      = gate-boolean var ∷ []
@@ -488,10 +505,12 @@ R-instr→gates-not _ s _ _ (r-not {b = b} lb)
   = b , mem->>=append to-bool (Preprocessed.memory s) _ _ lb ,
     mem-lookup-length (Preprocessed.memory s) _
 
--- cond-select: gate-boolean (n s) checks the result is 0/1, but cond-select
--- produces an arbitrary field element; this gate needs redesign.
-postulate
-  R-instr→gates-cond-select : ∀ pre s bit a b s' → R-instr pre s (cond-select bit a b) s' → gate-holds (Preprocessed.memory s') (gate-boolean (n s))
+-- cond-select: the circuit checks the selector is a boolean.
+R-instr→gates-cond-select : ∀ pre s bit a b s'
+  → R-instr pre s (cond-select bit a b) s'
+  → gate-holds (Preprocessed.memory s') (gate-boolean bit)
+R-instr→gates-cond-select _ s _ _ _ _ (r-cond-select {sel = sel} lsel _ _) =
+  sel , mem->>=append to-bool (Preprocessed.memory s) _ _ lsel
 
 -- No-push instructions: s' = s, so memory is unchanged.
 
@@ -624,10 +643,55 @@ R-instr→gates-pi-skip : ∀ pre s guard count s'
   → gate-holds (Preprocessed.memory s') (gate-pi-skip guard count)
 R-instr→gates-pi-skip _ _ _ _ _ _ = tt
 
--- public-input and private-input require eval-guard reasoning.
-postulate
-  R-instr→gates-public-input  : ∀ pre s guard s' → R-instr pre s (public-input guard) s' → gate-holds (Preprocessed.memory s') (gate-public-input (n s) guard)
-  R-instr→gates-private-input : ∀ pre s guard s' → R-instr pre s (private-input guard) s' → gate-holds (Preprocessed.memory s') (gate-private-input (n s) guard)
+R-instr→gates-public-input : ∀ pre s guard s'
+  → R-instr pre s (public-input guard) s'
+  → gate-holds (Preprocessed.memory s') (gate-public-input (n s) guard)
+R-instr→gates-public-input _ s _ _ (r-public-input-inactive gf) =
+  0ᶠ ,
+  mem-lookup-length (Preprocessed.memory s) 0ᶠ ,
+  λ i g-eq →
+    false ,
+    mem->>=append to-bool (Preprocessed.memory s) i _
+      (subst (λ g → eval-guard (Preprocessed.memory s) g ≡ just false) g-eq gf) ,
+    λ _ → refl
+R-instr→gates-public-input _ s _ _ (r-public-input-active {v = v} {s₁ = s₁} gt cp) =
+  let mem-eq = consume-pub-out-mem s v s₁ cp
+  in v ,
+  subst (λ k → mem-lookup (Preprocessed.memory s₁ ++ (v ∷ [])) k ≡ just v)
+    (cong length mem-eq)
+    (mem-lookup-length (Preprocessed.memory s₁) v) ,
+  λ i g-eq →
+    let guard-true = subst (λ g → eval-guard (Preprocessed.memory s) g ≡ just true) g-eq gt
+    in true ,
+    subst (λ m → (mem-lookup (m ++ (v ∷ [])) i >>= to-bool) ≡ just true)
+      (sym mem-eq)
+      (mem->>=append to-bool (Preprocessed.memory s) i _ guard-true) ,
+    λ ()
+
+R-instr→gates-private-input : ∀ pre s guard s'
+  → R-instr pre s (private-input guard) s'
+  → gate-holds (Preprocessed.memory s') (gate-private-input (n s) guard)
+R-instr→gates-private-input _ s _ _ (r-private-input-inactive gf) =
+  0ᶠ ,
+  mem-lookup-length (Preprocessed.memory s) 0ᶠ ,
+  λ i g-eq →
+    false ,
+    mem->>=append to-bool (Preprocessed.memory s) i _
+      (subst (λ g → eval-guard (Preprocessed.memory s) g ≡ just false) g-eq gf) ,
+    λ _ → refl
+R-instr→gates-private-input _ s _ _ (r-private-input-active {v = v} {s₁ = s₁} gt cp) =
+  let mem-eq = consume-priv-mem s v s₁ cp
+  in v ,
+  subst (λ k → mem-lookup (Preprocessed.memory s₁ ++ (v ∷ [])) k ≡ just v)
+    (cong length mem-eq)
+    (mem-lookup-length (Preprocessed.memory s₁) v) ,
+  λ i g-eq →
+    let guard-true = subst (λ g → eval-guard (Preprocessed.memory s) g ≡ just true) g-eq gt
+    in true ,
+    subst (λ m → (mem-lookup (m ++ (v ∷ [])) i >>= to-bool) ≡ just true)
+      (sym mem-eq)
+      (mem->>=append to-bool (Preprocessed.memory s) i _ guard-true) ,
+    λ ()
 
 ------------------------------------------------------------------------
 -- Dispatch: given R-instr, every emitted gate holds on the successor state.
