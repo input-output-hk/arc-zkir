@@ -54,6 +54,25 @@ private
   mem->>=append f (_ ∷ _)  zero    vs eq = eq
   mem->>=append f (_ ∷ xs) (suc n) vs eq = mem->>=append f xs n vs eq
 
+  -- All lookups in a list of indices are preserved when memory is extended.
+  mem-lookups-append : ∀ (mem : List Fr) (is : List Index) (extra : List Fr)
+    → ∀ {vs} → mem-lookups mem is ≡ just vs
+    → mem-lookups (mem ++ extra) is ≡ just vs
+  mem-lookups-append mem []       extra refl = refl
+  mem-lookups-append mem (i ∷ is) extra {vs} eq
+    with mem-lookup mem i in h1 | mem-lookups mem is in h2
+  mem-lookups-append mem (i ∷ is) extra {vs} ()  | nothing | _
+  mem-lookups-append mem (i ∷ is) extra {vs} ()  | just _  | nothing
+  mem-lookups-append mem (i ∷ is) extra {vs} eq  | just v  | just vs'
+    rewrite mem-lookup-append mem i v extra h1
+    rewrite mem-lookups-append mem is extra {vs'} h2
+    = eq
+
+  -- Appending one element increments the length.
+  length-++-one : ∀ (xs : List Fr) (x : Fr) → length (xs ++ (x ∷ [])) ≡ suc (length xs)
+  length-++-one []       _ = refl
+  length-++-one (_ ∷ xs) x = cong suc (length-++-one xs x)
+
 ------------------------------------------------------------------------
 -- Gate: a polynomial constraint over memory positions.
 --
@@ -130,11 +149,12 @@ gate-holds mem (gate-copy r a) =
     mem-lookup mem a ≡ just v ×
     mem-lookup mem r ≡ just v
 
--- mem[a] = mem[b]
+-- mem[a] ≡ᶠ? mem[b]
 gate-holds mem (gate-constrain-eq a b) =
-  ∃ λ v →
-    mem-lookup mem a ≡ just v ×
-    mem-lookup mem b ≡ just v
+  ∃ λ av → ∃ λ bv →
+    mem-lookup mem a ≡ just av ×
+    mem-lookup mem b ≡ just bv ×
+    av ≡ᶠ? bv ≡ true
 
 -- mem[a] ≠ 0  (combined with gate-boolean: means mem[a] = 1)
 gate-holds mem (gate-assert-nonzero a) =
@@ -353,23 +373,139 @@ R-instr→gates-not _ s _ _ (r-not {b = b} lb)
   = b , mem->>=append to-bool (Preprocessed.memory s) _ _ lb ,
     mem-lookup-length (Preprocessed.memory s) _
 
--- Postulated completeness for complex instructions.
+-- cond-select: gate-boolean (n s) checks the result is 0/1, but cond-select
+-- produces an arbitrary field element; this gate needs redesign.
 postulate
-  R-instr→gates-cond-select    : ∀ pre s bit a b s' → R-instr pre s (cond-select bit a b) s' → gate-holds (Preprocessed.memory s') (gate-boolean (n s))
-  R-instr→gates-constrain-bits : ∀ pre s var bits s' → R-instr pre s (constrain-bits var bits) s' → gate-holds (Preprocessed.memory s') (gate-constrain-bits var bits)
-  R-instr→gates-constrain-eq   : ∀ pre s a b s' → R-instr pre s (constrain-eq a b) s' → gate-holds (Preprocessed.memory s') (gate-constrain-eq a b)
-  R-instr→gates-constrain-bool : ∀ pre s var s' → R-instr pre s (constrain-to-boolean var) s' → gate-holds (Preprocessed.memory s') (gate-boolean var)
-  R-instr→gates-ec-add         : ∀ pre s a_x a_y b_x b_y s' → R-instr pre s (ec-add a_x a_y b_x b_y) s' → gate-holds (Preprocessed.memory s') (gate-ec-add (n s) (suc (n s)) a_x a_y b_x b_y)
-  R-instr→gates-ec-mul         : ∀ pre s a_x a_y sc s' → R-instr pre s (ec-mul a_x a_y sc) s' → gate-holds (Preprocessed.memory s') (gate-ec-mul (n s) (suc (n s)) a_x a_y sc)
-  R-instr→gates-ec-mul-gen     : ∀ pre s sc s' → R-instr pre s (ec-mul-generator sc) s' → gate-holds (Preprocessed.memory s') (gate-ec-mul-gen (n s) (suc (n s)) sc)
-  R-instr→gates-hash-to-curve  : ∀ pre s inputs s' → R-instr pre s (hash-to-curve inputs) s' → gate-holds (Preprocessed.memory s') (gate-hash-to-curve (n s) (suc (n s)) inputs)
-  R-instr→gates-transient-hash : ∀ pre s inputs s' → R-instr pre s (transient-hash inputs) s' → gate-holds (Preprocessed.memory s') (gate-transient-hash (n s) inputs)
-  R-instr→gates-persistent-hash : ∀ pre s alignment inputs s' → R-instr pre s (persistent-hash alignment inputs) s' → gate-holds (Preprocessed.memory s') (gate-persistent-hash (n s) (suc (n s)) alignment inputs)
-  R-instr→gates-div-mod-pow2   : ∀ pre s var bits s' → R-instr pre s (div-mod-power-of-two var bits) s' → gate-holds (Preprocessed.memory s') (gate-div-mod-pow2 (n s) (suc (n s)) var bits)
-  R-instr→gates-reconstitute   : ∀ pre s d m bits s' → R-instr pre s (reconstitute-field d m bits) s' → gate-holds (Preprocessed.memory s') (gate-reconstitute (n s) d m bits)
-  R-instr→gates-less-than      : ∀ pre s a b bits s' → R-instr pre s (less-than a b bits) s' → gate-holds (Preprocessed.memory s') (gate-less-than (n s) a b bits)
-  R-instr→gates-public-input   : ∀ pre s guard s' → R-instr pre s (public-input guard) s' → gate-holds (Preprocessed.memory s') (gate-public-input (n s) guard)
-  R-instr→gates-private-input  : ∀ pre s guard s' → R-instr pre s (private-input guard) s' → gate-holds (Preprocessed.memory s') (gate-private-input (n s) guard)
+  R-instr→gates-cond-select : ∀ pre s bit a b s' → R-instr pre s (cond-select bit a b) s' → gate-holds (Preprocessed.memory s') (gate-boolean (n s))
+
+-- No-push instructions: s' = s, so memory is unchanged.
+
+R-instr→gates-constrain-bits : ∀ pre s var bits s'
+  → R-instr pre s (constrain-bits var bits) s'
+  → gate-holds (Preprocessed.memory s') (gate-constrain-bits var bits)
+R-instr→gates-constrain-bits _ _ _ _ _ (r-constrain-bits {v = v} lv fits) = v , lv , fits
+
+R-instr→gates-constrain-eq : ∀ pre s a b s'
+  → R-instr pre s (constrain-eq a b) s'
+  → gate-holds (Preprocessed.memory s') (gate-constrain-eq a b)
+R-instr→gates-constrain-eq _ _ _ _ _ (r-constrain-eq {av = av} {bv = bv} la lb eq) =
+  av , bv , la , lb , eq
+
+R-instr→gates-constrain-bool : ∀ pre s var s'
+  → R-instr pre s (constrain-to-boolean var) s'
+  → gate-holds (Preprocessed.memory s') (gate-boolean var)
+R-instr→gates-constrain-bool _ _ _ _ (r-constrain-to-boolean {b = b} lb) = b , lb
+
+-- Single-push instructions.
+
+R-instr→gates-less-than : ∀ pre s a b bits s'
+  → R-instr pre s (less-than a b bits) s'
+  → gate-holds (Preprocessed.memory s') (gate-less-than (n s) a b bits)
+R-instr→gates-less-than _ s _ _ _ _ (r-less-than {av = av} {bv = bv} la lb fits) =
+  av , bv ,
+  mem-lookup-append (Preprocessed.memory s) _ av _ la ,
+  mem-lookup-append (Preprocessed.memory s) _ bv _ lb ,
+  fits ,
+  mem-lookup-length (Preprocessed.memory s) _
+
+R-instr→gates-reconstitute : ∀ pre s d m bits s'
+  → R-instr pre s (reconstitute-field d m bits) s'
+  → gate-holds (Preprocessed.memory s') (gate-reconstitute (n s) d m bits)
+R-instr→gates-reconstitute _ s _ _ _ _ (r-reconstitute-field {dv = dv} {mv = mv} ldv lmv chk) =
+  dv , mv ,
+  mem-lookup-append (Preprocessed.memory s) _ dv _ ldv ,
+  mem-lookup-append (Preprocessed.memory s) _ mv _ lmv ,
+  chk ,
+  mem-lookup-length (Preprocessed.memory s) _
+
+R-instr→gates-transient-hash : ∀ pre s inputs s'
+  → R-instr pre s (transient-hash inputs) s'
+  → gate-holds (Preprocessed.memory s') (gate-transient-hash (n s) inputs)
+R-instr→gates-transient-hash _ s inputs _ (r-transient-hash {vs = vs} lvs) =
+  vs ,
+  mem-lookups-append (Preprocessed.memory s) inputs (transient-hash-fn vs ∷ []) lvs ,
+  mem-lookup-length (Preprocessed.memory s) _
+
+-- Double-push (push-mem2) instructions.
+
+R-instr→gates-ec-add : ∀ pre s a_x a_y b_x b_y s'
+  → R-instr pre s (ec-add a_x a_y b_x b_y) s'
+  → gate-holds (Preprocessed.memory s') (gate-ec-add (n s) (suc (n s)) a_x a_y b_x b_y)
+R-instr→gates-ec-add _ s _ _ _ _ _ (r-ec-add {ax = ax} {ay = ay} {bx = bx} {by = by} {cx = cx} {cy = cy} lax lay lbx lby ec) =
+  ax , ay , bx , by , cx , cy ,
+  mem-lookup-append (Preprocessed.memory s) _ ax _ lax ,
+  mem-lookup-append (Preprocessed.memory s) _ ay _ lay ,
+  mem-lookup-append (Preprocessed.memory s) _ bx _ lbx ,
+  mem-lookup-append (Preprocessed.memory s) _ by _ lby ,
+  ec ,
+  mem-lookup-length2-fst (Preprocessed.memory s) cx cy ,
+  mem-lookup-length2-snd (Preprocessed.memory s) cx cy
+
+R-instr→gates-ec-mul : ∀ pre s a_x a_y sc s'
+  → R-instr pre s (ec-mul a_x a_y sc) s'
+  → gate-holds (Preprocessed.memory s') (gate-ec-mul (n s) (suc (n s)) a_x a_y sc)
+R-instr→gates-ec-mul _ s _ _ _ _ (r-ec-mul {ax = ax} {ay = ay} {sc = scv} {cx = cx} {cy = cy} lax lay lsc ec) =
+  ax , ay , scv , cx , cy ,
+  mem-lookup-append (Preprocessed.memory s) _ ax _ lax ,
+  mem-lookup-append (Preprocessed.memory s) _ ay _ lay ,
+  mem-lookup-append (Preprocessed.memory s) _ scv _ lsc ,
+  ec ,
+  mem-lookup-length2-fst (Preprocessed.memory s) cx cy ,
+  mem-lookup-length2-snd (Preprocessed.memory s) cx cy
+
+R-instr→gates-ec-mul-gen : ∀ pre s sc s'
+  → R-instr pre s (ec-mul-generator sc) s'
+  → gate-holds (Preprocessed.memory s') (gate-ec-mul-gen (n s) (suc (n s)) sc)
+R-instr→gates-ec-mul-gen _ s _ _ (r-ec-mul-generator {sc = scv} {cx = cx} {cy = cy} lsc eq) =
+  scv ,
+  mem-lookup-append (Preprocessed.memory s) _ scv _ lsc ,
+  trans (mem-lookup-length2-fst (Preprocessed.memory s) cx cy)
+        (cong just (sym (cong proj₁ eq))) ,
+  trans (mem-lookup-length2-snd (Preprocessed.memory s) cx cy)
+        (cong just (sym (cong proj₂ eq)))
+
+R-instr→gates-hash-to-curve : ∀ pre s inputs s'
+  → R-instr pre s (hash-to-curve inputs) s'
+  → gate-holds (Preprocessed.memory s') (gate-hash-to-curve (n s) (suc (n s)) inputs)
+R-instr→gates-hash-to-curve _ s inputs _ (r-hash-to-curve {vs = vs} {cx = cx} {cy = cy} lvs eq) =
+  vs ,
+  mem-lookups-append (Preprocessed.memory s) inputs (cx ∷ cy ∷ []) lvs ,
+  trans (mem-lookup-length2-fst (Preprocessed.memory s) cx cy)
+        (cong just (sym (cong proj₁ eq))) ,
+  trans (mem-lookup-length2-snd (Preprocessed.memory s) cx cy)
+        (cong just (sym (cong proj₂ eq)))
+
+R-instr→gates-persistent-hash : ∀ pre s alignment inputs s'
+  → R-instr pre s (persistent-hash alignment inputs) s'
+  → gate-holds (Preprocessed.memory s') (gate-persistent-hash (n s) (suc (n s)) alignment inputs)
+R-instr→gates-persistent-hash _ s _ inputs _ (r-persistent-hash {vs = vs} {h₁ = h₁} {h₂ = h₂} lvs eq) =
+  vs ,
+  mem-lookups-append (Preprocessed.memory s) inputs (h₁ ∷ h₂ ∷ []) lvs ,
+  trans (mem-lookup-length2-fst (Preprocessed.memory s) h₁ h₂)
+        (cong just (sym (cong proj₁ eq))) ,
+  trans (mem-lookup-length2-snd (Preprocessed.memory s) h₁ h₂)
+        (cong just (sym (cong proj₂ eq)))
+
+-- Nested push-mem (not push-mem2) instruction.
+
+R-instr→gates-div-mod-pow2 : ∀ pre s var bits s'
+  → R-instr pre s (div-mod-power-of-two var bits) s'
+  → gate-holds (Preprocessed.memory s') (gate-div-mod-pow2 (n s) (suc (n s)) var bits)
+R-instr→gates-div-mod-pow2 _ s _ bits _ (r-div-mod-power-of-two {v = v} lv) =
+  let mem = Preprocessed.memory s
+      v1  = from-le-bits (drop bits (to-le-bits v))
+      v2  = from-le-bits (take bits (to-le-bits v))
+  in v ,
+     mem-lookup-append (mem ++ (v1 ∷ [])) _ v _ (mem-lookup-append mem _ v _ lv) ,
+     mem-lookup-append (mem ++ (v1 ∷ [])) _ v1 _ (mem-lookup-length mem v1) ,
+     subst (λ k → mem-lookup ((mem ++ (v1 ∷ [])) ++ (v2 ∷ [])) k ≡ just v2)
+           (length-++-one mem v1)
+           (mem-lookup-length (mem ++ (v1 ∷ [])) v2)
+
+-- public-input and private-input require eval-guard reasoning.
+postulate
+  R-instr→gates-public-input  : ∀ pre s guard s' → R-instr pre s (public-input guard) s' → gate-holds (Preprocessed.memory s') (gate-public-input (n s) guard)
+  R-instr→gates-private-input : ∀ pre s guard s' → R-instr pre s (private-input guard) s' → gate-holds (Preprocessed.memory s') (gate-private-input (n s) guard)
 
 ------------------------------------------------------------------------
 -- Soundness: all gates satisfied → R-instr.
