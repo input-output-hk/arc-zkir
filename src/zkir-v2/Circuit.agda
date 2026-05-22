@@ -7,10 +7,13 @@ open import Data.Bool    using (Bool; true; false; _∧_)
 import Data.Bool as Bool
 open import Data.List    using (List; []; _∷_; _++_; length; take; drop; reverse)
 open import Data.List.Membership.Propositional using (_∈_)
+open import Data.List.Relation.Unary.Any using (here; there)
 open import Data.Maybe   using (Maybe; nothing; just; _>>=_)
 open import Data.Nat     using (ℕ; zero; suc; _∸_)
 open import Data.Product using (_×_; _,_; ∃; proj₁; proj₂)
 open import Data.Maybe.Properties using (just-injective)
+open import Data.Sum     using (_⊎_; inj₁; inj₂)
+open import Data.Unit    using (⊤; tt)
 open import Relation.Binary.PropositionalEquality
   using (_≡_; refl; sym; cong; subst; trans)
 
@@ -267,7 +270,119 @@ gate-holds mem (gate-private-input r guard) =
                (b ≡ false → v ≡ 0ᶠ))
 
 gate-holds mem (gate-pi-skip guard count) = ⊤
-  where open import Data.Unit using (⊤)
+
+------------------------------------------------------------------------
+-- Monotonicity: gate-holds is preserved when memory is extended.
+------------------------------------------------------------------------
+
+gate-holds-monotone : ∀ (g : Gate) (mem extra : List Fr)
+  → gate-holds mem g → gate-holds (mem ++ extra) g
+gate-holds-monotone (gate-add r a b) mem extra (av , bv , la , lb , lr) =
+  av , bv ,
+  mem-lookup-append mem a av extra la ,
+  mem-lookup-append mem b bv extra lb ,
+  mem-lookup-append mem r _ extra lr
+gate-holds-monotone (gate-mul r a b) mem extra (av , bv , la , lb , lr) =
+  av , bv ,
+  mem-lookup-append mem a av extra la ,
+  mem-lookup-append mem b bv extra lb ,
+  mem-lookup-append mem r _ extra lr
+gate-holds-monotone (gate-neg r a) mem extra (av , la , lr) =
+  av ,
+  mem-lookup-append mem a av extra la ,
+  mem-lookup-append mem r _ extra lr
+gate-holds-monotone (gate-const r v) mem extra lr =
+  mem-lookup-append mem r v extra lr
+gate-holds-monotone (gate-copy r a) mem extra (v , la , lr) =
+  v ,
+  mem-lookup-append mem a v extra la ,
+  mem-lookup-append mem r v extra lr
+gate-holds-monotone (gate-constrain-eq a b) mem extra (av , bv , la , lb , eq) =
+  av , bv ,
+  mem-lookup-append mem a av extra la ,
+  mem-lookup-append mem b bv extra lb ,
+  eq
+gate-holds-monotone (gate-assert-nonzero a) mem extra (b , lb , bt) =
+  b , mem->>=append to-bool mem a extra lb , bt
+gate-holds-monotone (gate-boolean a) mem extra (b , lb) =
+  b , mem->>=append to-bool mem a extra lb
+gate-holds-monotone (gate-test-eq r a b) mem extra (av , bv , la , lb , lr) =
+  av , bv ,
+  mem-lookup-append mem a av extra la ,
+  mem-lookup-append mem b bv extra lb ,
+  mem-lookup-append mem r _ extra lr
+gate-holds-monotone (gate-is-zero r a) mem extra (b , lb , lr) =
+  b ,
+  mem->>=append to-bool mem a extra lb ,
+  mem-lookup-append mem r _ extra lr
+gate-holds-monotone (gate-constrain-bits a bits) mem extra (v , lv , fits) =
+  v , mem-lookup-append mem a v extra lv , fits
+gate-holds-monotone (gate-less-than r a b bits) mem extra (av , bv , la , lb , fits , lr) =
+  av , bv ,
+  mem-lookup-append mem a av extra la ,
+  mem-lookup-append mem b bv extra lb ,
+  fits ,
+  mem-lookup-append mem r _ extra lr
+gate-holds-monotone (gate-ec-add r_x r_y a_x a_y b_x b_y) mem extra
+    (ax , ay , bx , by , cx , cy , lax , lay , lbx , lby , ec , lrx , lry) =
+  ax , ay , bx , by , cx , cy ,
+  mem-lookup-append mem a_x ax extra lax ,
+  mem-lookup-append mem a_y ay extra lay ,
+  mem-lookup-append mem b_x bx extra lbx ,
+  mem-lookup-append mem b_y by extra lby ,
+  ec ,
+  mem-lookup-append mem r_x cx extra lrx ,
+  mem-lookup-append mem r_y cy extra lry
+gate-holds-monotone (gate-ec-mul r_x r_y a_x a_y sc) mem extra
+    (ax , ay , s , cx , cy , lax , lay , lsc , ec , lrx , lry) =
+  ax , ay , s , cx , cy ,
+  mem-lookup-append mem a_x ax extra lax ,
+  mem-lookup-append mem a_y ay extra lay ,
+  mem-lookup-append mem sc  s  extra lsc ,
+  ec ,
+  mem-lookup-append mem r_x cx extra lrx ,
+  mem-lookup-append mem r_y cy extra lry
+gate-holds-monotone (gate-ec-mul-gen r_x r_y sc) mem extra (s , lsc , lrx , lry) =
+  s ,
+  mem-lookup-append mem sc  s extra lsc ,
+  mem-lookup-append mem r_x _ extra lrx ,
+  mem-lookup-append mem r_y _ extra lry
+gate-holds-monotone (gate-hash-to-curve r_x r_y inputs) mem extra (vs , lvs , lrx , lry) =
+  vs ,
+  mem-lookups-append mem inputs extra lvs ,
+  mem-lookup-append mem r_x _ extra lrx ,
+  mem-lookup-append mem r_y _ extra lry
+gate-holds-monotone (gate-transient-hash r inputs) mem extra (vs , lvs , lr) =
+  vs ,
+  mem-lookups-append mem inputs extra lvs ,
+  mem-lookup-append mem r _ extra lr
+gate-holds-monotone (gate-persistent-hash r_x r_y alignment inputs) mem extra (vs , lvs , lrx , lry) =
+  vs ,
+  mem-lookups-append mem inputs extra lvs ,
+  mem-lookup-append mem r_x _ extra lrx ,
+  mem-lookup-append mem r_y _ extra lry
+gate-holds-monotone (gate-div-mod-pow2 r_d r_m a bits) mem extra (v , lv , lrd , lrm) =
+  v ,
+  mem-lookup-append mem a   v extra lv ,
+  mem-lookup-append mem r_d _ extra lrd ,
+  mem-lookup-append mem r_m _ extra lrm
+gate-holds-monotone (gate-reconstitute r d m bits) mem extra (dv , mv , ld , lm , chk , lr) =
+  dv , mv ,
+  mem-lookup-append mem d dv extra ld ,
+  mem-lookup-append mem m mv extra lm ,
+  chk ,
+  mem-lookup-append mem r _ extra lr
+gate-holds-monotone (gate-public-input r guard) mem extra (v , lv , gd) =
+  v ,
+  mem-lookup-append mem r v extra lv ,
+  λ i eq → let (b , li , cond) = gd i eq
+            in b , mem-lookup-append mem i _ extra li , cond
+gate-holds-monotone (gate-private-input r guard) mem extra (v , lv , gd) =
+  v ,
+  mem-lookup-append mem r v extra lv ,
+  λ i eq → let (b , li , cond) = gd i eq
+            in b , mem-lookup-append mem i _ extra li , cond
+gate-holds-monotone (gate-pi-skip guard count) mem extra _ = tt
 
 ------------------------------------------------------------------------
 -- Per-instruction gate generation
@@ -502,10 +617,100 @@ R-instr→gates-div-mod-pow2 _ s _ bits _ (r-div-mod-power-of-two {v = v} lv) =
            (length-++-one mem v1)
            (mem-lookup-length (mem ++ (v1 ∷ [])) v2)
 
+-- pi-skip: gate-holds is ⊤, trivially true.
+
+R-instr→gates-pi-skip : ∀ pre s guard count s'
+  → R-instr pre s (pi-skip guard count) s'
+  → gate-holds (Preprocessed.memory s') (gate-pi-skip guard count)
+R-instr→gates-pi-skip _ _ _ _ _ _ = tt
+
 -- public-input and private-input require eval-guard reasoning.
 postulate
   R-instr→gates-public-input  : ∀ pre s guard s' → R-instr pre s (public-input guard) s' → gate-holds (Preprocessed.memory s') (gate-public-input (n s) guard)
   R-instr→gates-private-input : ∀ pre s guard s' → R-instr pre s (private-input guard) s' → gate-holds (Preprocessed.memory s') (gate-private-input (n s) guard)
+
+------------------------------------------------------------------------
+-- Dispatch: given R-instr, every emitted gate holds on the successor state.
+------------------------------------------------------------------------
+
+R-instr→gates : ∀ pre s i s'
+  → R-instr pre s i s'
+  → ∀ g → g ∈ circuit-instr-gates pre s i
+  → gate-holds (Preprocessed.memory s') g
+R-instr→gates pre s (assert cond) s' ri g (here refl) =
+  R-instr→gates-assert pre s cond s' ri
+R-instr→gates pre s (assert cond) s' ri g (there ())
+R-instr→gates pre s (cond-select bit a b) s' ri g (here refl) =
+  R-instr→gates-cond-select pre s bit a b s' ri
+R-instr→gates pre s (cond-select bit a b) s' ri g (there ())
+R-instr→gates pre s (constrain-bits var bits) s' ri g (here refl) =
+  R-instr→gates-constrain-bits pre s var bits s' ri
+R-instr→gates pre s (constrain-bits var bits) s' ri g (there ())
+R-instr→gates pre s (constrain-eq a b) s' ri g (here refl) =
+  R-instr→gates-constrain-eq pre s a b s' ri
+R-instr→gates pre s (constrain-eq a b) s' ri g (there ())
+R-instr→gates pre s (constrain-to-boolean var) s' ri g (here refl) =
+  R-instr→gates-constrain-bool pre s var s' ri
+R-instr→gates pre s (constrain-to-boolean var) s' ri g (there ())
+R-instr→gates pre s (copy var) s' ri g (here refl) =
+  R-instr→gates-copy pre s var s' ri
+R-instr→gates pre s (copy var) s' ri g (there ())
+R-instr→gates pre s (declare-pub-input _) s' ri g ()
+R-instr→gates pre s (pi-skip guard count) s' ri g (here refl) =
+  R-instr→gates-pi-skip pre s guard count s' ri
+R-instr→gates pre s (pi-skip guard count) s' ri g (there ())
+R-instr→gates pre s (ec-add a_x a_y b_x b_y) s' ri g (here refl) =
+  R-instr→gates-ec-add pre s a_x a_y b_x b_y s' ri
+R-instr→gates pre s (ec-add a_x a_y b_x b_y) s' ri g (there ())
+R-instr→gates pre s (ec-mul a_x a_y scalar) s' ri g (here refl) =
+  R-instr→gates-ec-mul pre s a_x a_y scalar s' ri
+R-instr→gates pre s (ec-mul a_x a_y scalar) s' ri g (there ())
+R-instr→gates pre s (ec-mul-generator scalar) s' ri g (here refl) =
+  R-instr→gates-ec-mul-gen pre s scalar s' ri
+R-instr→gates pre s (ec-mul-generator scalar) s' ri g (there ())
+R-instr→gates pre s (hash-to-curve inputs) s' ri g (here refl) =
+  R-instr→gates-hash-to-curve pre s inputs s' ri
+R-instr→gates pre s (hash-to-curve inputs) s' ri g (there ())
+R-instr→gates pre s (load-imm imm) s' ri g (here refl) =
+  R-instr→gates-load-imm pre s imm s' ri
+R-instr→gates pre s (load-imm imm) s' ri g (there ())
+R-instr→gates pre s (div-mod-power-of-two var bits) s' ri g (here refl) =
+  R-instr→gates-div-mod-pow2 pre s var bits s' ri
+R-instr→gates pre s (div-mod-power-of-two var bits) s' ri g (there ())
+R-instr→gates pre s (reconstitute-field d m bits) s' ri g (here refl) =
+  R-instr→gates-reconstitute pre s d m bits s' ri
+R-instr→gates pre s (reconstitute-field d m bits) s' ri g (there ())
+R-instr→gates pre s (output _) s' ri g ()
+R-instr→gates pre s (transient-hash inputs) s' ri g (here refl) =
+  R-instr→gates-transient-hash pre s inputs s' ri
+R-instr→gates pre s (transient-hash inputs) s' ri g (there ())
+R-instr→gates pre s (persistent-hash alignment is) s' ri g (here refl) =
+  R-instr→gates-persistent-hash pre s alignment is s' ri
+R-instr→gates pre s (persistent-hash alignment is) s' ri g (there ())
+R-instr→gates pre s (test-eq a b) s' ri g (here refl) =
+  R-instr→gates-test-eq pre s a b s' ri
+R-instr→gates pre s (test-eq a b) s' ri g (there ())
+R-instr→gates pre s (add a b) s' ri g (here refl) =
+  R-instr→gates-add pre s a b s' ri
+R-instr→gates pre s (add a b) s' ri g (there ())
+R-instr→gates pre s (mul a b) s' ri g (here refl) =
+  R-instr→gates-mul pre s a b s' ri
+R-instr→gates pre s (mul a b) s' ri g (there ())
+R-instr→gates pre s (neg a) s' ri g (here refl) =
+  R-instr→gates-neg pre s a s' ri
+R-instr→gates pre s (neg a) s' ri g (there ())
+R-instr→gates pre s (not a) s' ri g (here refl) =
+  R-instr→gates-not pre s a s' ri
+R-instr→gates pre s (not a) s' ri g (there ())
+R-instr→gates pre s (less-than a b bits) s' ri g (here refl) =
+  R-instr→gates-less-than pre s a b bits s' ri
+R-instr→gates pre s (less-than a b bits) s' ri g (there ())
+R-instr→gates pre s (public-input guard) s' ri g (here refl) =
+  R-instr→gates-public-input pre s guard s' ri
+R-instr→gates pre s (public-input guard) s' ri g (there ())
+R-instr→gates pre s (private-input guard) s' ri g (here refl) =
+  R-instr→gates-private-input pre s guard s' ri
+R-instr→gates pre s (private-input guard) s' ri g (there ())
 
 ------------------------------------------------------------------------
 -- Soundness: all gates satisfied → R-instr.

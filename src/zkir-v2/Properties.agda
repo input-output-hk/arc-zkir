@@ -2,18 +2,23 @@ module zkir-v2.Properties where
 
 open import zkir-v2.Syntax
 open import zkir-v2.Semantics
+open import zkir-v2.Circuit
 
 open import Data.Bool    using (Bool; true; false; if_then_else_; _∧_)
-open import Data.List    using (List; []; _∷_; length)
-open import Data.List.Properties using (length-++-≤ˡ)
-open import Data.Maybe   using (Maybe; nothing; just; _>>=_)
+open import Data.List    using (List; []; _∷_; _++_; length; take; drop)
+open import Data.Maybe   using (Maybe; nothing; just; _>>=_; maybe)
+open import Data.List.Properties using (length-++-≤ˡ; ++-assoc; ++-identityʳ)
+open import Data.List.Membership.Propositional using (_∈_)
+open import Data.List.Membership.Propositional.Properties using (∈-++⁻; ∈-++⁺ˡ; ∈-++⁺ʳ)
+
 open import Data.Nat     using (ℕ; _≤_)
 open import Data.Nat.Properties  using (≤-trans; ≤-reflexive)
 open import Data.Product using (_×_; _,_; ∃; proj₂)
 open import Data.Maybe.Properties using (just-injective)
+open import Data.Sum     using (_⊎_; inj₁; inj₂)
 open import Relation.Binary.PropositionalEquality
-  using (_≡_; refl; sym; cong; subst)
-open import Function.Bundles using (_↔_)
+  using (_≡_; refl; sym; cong; subst; trans)
+open import Function.Bundles using (_⇔_; mk⇔)
 
 ------------------------------------------------------------------------
 -- Local proof helpers
@@ -926,15 +931,131 @@ R→preprocess src pre s (s₀ , init-eq , ris , tc , co)
 ------------------------------------------------------------------------
 -- 5. Circuit correctness
 -- The Halo2 constraint synthesis (circuit) is faithful to R.
--- A full proof requires modelling the polynomial constraint system.
+------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+-- 5a. Memory extension lemmas
+------------------------------------------------------------------------
+
+-- Single-step: memory only grows (with a concrete witness for the extra).
+R-instr-memory-extends : ∀ pre s i s'
+  → R-instr pre s i s'
+  → ∃ λ extra → Preprocessed.memory s' ≡ Preprocessed.memory s ++ extra
+R-instr-memory-extends _ s (assert _) .s (r-assert _)      = [] , sym (++-identityʳ _)
+R-instr-memory-extends _ s (cond-select _ _ _) _ (r-cond-select _ _ _) = _ ∷ [] , refl
+R-instr-memory-extends _ s (constrain-bits _ _) .s (r-constrain-bits _ _) = [] , sym (++-identityʳ _)
+R-instr-memory-extends _ s (constrain-eq _ _) .s (r-constrain-eq _ _ _)   = [] , sym (++-identityʳ _)
+R-instr-memory-extends _ s (constrain-to-boolean _) .s (r-constrain-to-boolean _) = [] , sym (++-identityʳ _)
+R-instr-memory-extends _ s (copy _) _ (r-copy _) = _ ∷ [] , refl
+R-instr-memory-extends _ s (declare-pub-input _) _ (r-declare-pub-input _) = [] , sym (++-identityʳ _)
+R-instr-memory-extends _ s (pi-skip _ _) _ (r-pi-skip-active _ _) = [] , sym (++-identityʳ _)
+R-instr-memory-extends _ s (pi-skip _ _) _ (r-pi-skip-inactive _) = [] , sym (++-identityʳ _)
+R-instr-memory-extends _ s (ec-add _ _ _ _) _ (r-ec-add _ _ _ _ _) = _ ∷ _ ∷ [] , refl
+R-instr-memory-extends _ s (ec-mul _ _ _) _ (r-ec-mul _ _ _ _) = _ ∷ _ ∷ [] , refl
+R-instr-memory-extends _ s (ec-mul-generator _) _ (r-ec-mul-generator _ _) = _ ∷ _ ∷ [] , refl
+R-instr-memory-extends _ s (hash-to-curve _) _ (r-hash-to-curve _ _) = _ ∷ _ ∷ [] , refl
+R-instr-memory-extends _ s (load-imm imm) _ r-load-imm = imm ∷ [] , refl
+R-instr-memory-extends _ s (div-mod-power-of-two _ bits) _
+    (r-div-mod-power-of-two {v = v} _) =
+  let v1 = from-le-bits (drop bits (to-le-bits v))
+      v2 = from-le-bits (take bits (to-le-bits v))
+  in v1 ∷ v2 ∷ [] ,
+     trans (++-assoc (Preprocessed.memory s) (v1 ∷ []) (v2 ∷ [])) refl
+R-instr-memory-extends _ s (reconstitute-field _ _ _) _ (r-reconstitute-field _ _ _) = _ ∷ [] , refl
+R-instr-memory-extends _ s (output _) _ (r-output _) = [] , sym (++-identityʳ _)
+R-instr-memory-extends _ s (transient-hash _) _ (r-transient-hash _) = _ ∷ [] , refl
+R-instr-memory-extends _ s (persistent-hash _ _) _ (r-persistent-hash _ _) = _ ∷ _ ∷ [] , refl
+R-instr-memory-extends _ s (test-eq _ _) _ (r-test-eq _ _) = _ ∷ [] , refl
+R-instr-memory-extends _ s (add _ _) _ (r-add _ _) = _ ∷ [] , refl
+R-instr-memory-extends _ s (mul _ _) _ (r-mul _ _) = _ ∷ [] , refl
+R-instr-memory-extends _ s (neg _) _ (r-neg _) = _ ∷ [] , refl
+R-instr-memory-extends _ s (not _) _ (r-not _) = _ ∷ [] , refl
+R-instr-memory-extends _ s (less-than _ _ _) _ (r-less-than _ _ _) = _ ∷ [] , refl
+R-instr-memory-extends _ s (public-input _) _ (r-public-input-inactive _) = 0ᶠ ∷ [] , refl
+R-instr-memory-extends _ s (public-input _) _ (r-public-input-active {v = v} {s₁ = s₁} _ cp) =
+  v ∷ [] ,
+  cong (_++ (v ∷ [])) (consume-pub-out-mem s v s₁ cp)
+R-instr-memory-extends _ s (private-input _) _ (r-private-input-inactive _) = 0ᶠ ∷ [] , refl
+R-instr-memory-extends _ s (private-input _) _ (r-private-input-active {v = v} {s₁ = s₁} _ cp) =
+  v ∷ [] ,
+  cong (_++ (v ∷ [])) (consume-priv-mem s v s₁ cp)
+
+-- Multi-step: memory only grows.
+R-instrs-memory-extends : ∀ pre s is s'
+  → R-instrs pre s is s'
+  → ∃ λ extra → Preprocessed.memory s' ≡ Preprocessed.memory s ++ extra
+R-instrs-memory-extends _ s [] .s r-done = [] , sym (++-identityʳ _)
+R-instrs-memory-extends pre s (i ∷ is) s' (r-step {s₁ = s₁} ri ris)
+  with R-instr-memory-extends pre s i s₁ ri
+     | R-instrs-memory-extends pre s₁ is s' ris
+... | e1 , eq1 | e2 , eq2 =
+  e1 ++ e2 ,
+  trans eq2 (trans (cong (_++ e2) eq1) (++-assoc (Preprocessed.memory s) e1 e2))
+
+------------------------------------------------------------------------
+-- 5b. Concrete constraint system
+------------------------------------------------------------------------
+
+-- A constraint system is a list of gates.
+ConstraintSystem : Set
+ConstraintSystem = List Gate
+
+-- Generate gates for a sequence of instructions, threading through states.
+circuit-instrs : ProofPreimage → Preprocessed → List Instruction → List Gate
+circuit-instrs pre s []       = []
+circuit-instrs pre s (i ∷ is) with preprocess-instr pre s i
+... | nothing = circuit-instr-gates pre s i
+... | just s' = circuit-instr-gates pre s i ++ circuit-instrs pre s' is
+
+-- Generate the full circuit for a source program.
+circuit : IrSource → ProofPreimage → List Gate
+circuit src pre with init-state src pre
+... | nothing = []
+... | just s₀ = circuit-instrs pre s₀ (IrSource.instructions src)
+
+-- A state satisfies a constraint system if all gates hold in its memory.
+satisfies : ConstraintSystem → Preprocessed → Set
+satisfies cs s = ∀ g → g ∈ cs → gate-holds (Preprocessed.memory s) g
+
+------------------------------------------------------------------------
+-- 5c. Forward direction: R → satisfies
+------------------------------------------------------------------------
+
+-- Helper: R-instr implies the gate for this instruction holds on s' memory,
+-- and that preprocess-instr pre s i ≡ just s₁ (needed to unfold circuit-instrs).
+circuit-instrs-complete : ∀ pre s is s_fin
+  → R-instrs pre s is s_fin
+  → satisfies (circuit-instrs pre s is) s_fin
+circuit-instrs-complete pre s [] .s r-done g ()
+circuit-instrs-complete pre s (i ∷ is) s_fin (r-step {s₁ = s₁} ri ris) g g-in
+  with R-instrs-memory-extends pre s₁ is s_fin ris
+... | extra , mem-eq
+  with R-instr→preprocess-instr pre s i s₁ ri
+... | prep-eq
+  rewrite prep-eq
+  with ∈-++⁻ (circuit-instr-gates pre s i) g-in
+... | inj₁ g-in-gates =
+  subst (λ m → gate-holds m g) (sym mem-eq)
+    (gate-holds-monotone g (Preprocessed.memory s₁) extra
+      (R-instr→gates pre s i s₁ ri g g-in-gates))
+... | inj₂ g-in-rest =
+  circuit-instrs-complete pre s₁ is s_fin ris g g-in-rest
+
+R→satisfies : ∀ src pre s → R src pre s → satisfies (circuit src pre) s
+R→satisfies src pre s (s₀ , hs₀ , rs , _ , _) g g-in
+  rewrite hs₀
+  = circuit-instrs-complete pre s₀ (IrSource.instructions src) s rs g g-in
+
+------------------------------------------------------------------------
+-- 5d. Backward direction (still postulated)
 ------------------------------------------------------------------------
 
 postulate
-  -- An opaque type for the Halo2 constraint system produced by circuit.
-  ConstraintSystem : Set
-  -- circuit produces a constraint system from source and preimage.
-  circuit : IrSource → ProofPreimage → ConstraintSystem
-  -- A preprocessed state satisfies a constraint system.
-  satisfies : ConstraintSystem → Preprocessed → Set
-  -- circuit is faithful to the relational semantics.
-  circuit-faithful : ∀ src pre s → R src pre s ↔ satisfies (circuit src pre) s
+  satisfies→R : ∀ src pre s → satisfies (circuit src pre) s → R src pre s
+
+------------------------------------------------------------------------
+-- 5e. Full faithfulness theorem
+------------------------------------------------------------------------
+
+circuit-faithful : ∀ src pre s → R src pre s ⇔ satisfies (circuit src pre) s
+circuit-faithful src pre s = mk⇔ (R→satisfies src pre s) (satisfies→R src pre s)
