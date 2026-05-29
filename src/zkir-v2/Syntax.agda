@@ -1,4 +1,7 @@
-module zkir-v2.Syntax where
+{-# OPTIONS --safe #-}
+open import zkir-v2.Assumptions
+
+module zkir-v2.Syntax (⋯ : _) (open Assumptions ⋯) where
 
 open import Data.Bool  using (Bool)
 open import Data.List  using (List)
@@ -6,17 +9,11 @@ open import Data.Maybe using (Maybe)
 open import Data.Nat   using (ℕ)
 
 ------------------------------------------------------------------------
--- Postulated external types
-------------------------------------------------------------------------
-
-postulate
-  Fr        : Set
-  -- ^ BLS12-381 scalar field element (transient_crypto::curve::Fr).
-
-  Alignment : Set
-  -- ^ Byte-alignment descriptor (base_crypto::fab::Alignment).
-  --   Used by PersistentHash to describe the layout of its inputs.
-
+-- External carrier types
+--
+-- `Fr` (BLS12-381 scalar field element, transient_crypto::curve::Fr) and
+-- `Alignment` (byte-alignment descriptor, base_crypto::fab::Alignment)
+-- are part of the trust base; they come from the `Assumptions` parameter.
 ------------------------------------------------------------------------
 -- Index  (ir.rs: Index = u32)
 --
@@ -154,7 +151,8 @@ data Instruction : Set where
     → Instruction
 
   -- Long-term (persistent) hash with alignment metadata.
-  -- 1 output (binary format).
+  -- 2 outputs: (h₁, h₂), with h₁ the high-order byte and h₂ the
+  -- remaining 31 bytes assembled as a field element.
   persistent-hash
     : (alignment : Alignment)
     → (inputs    : List Index)
@@ -193,13 +191,17 @@ data Instruction : Set where
     → Instruction
 
   -- Retrieve the next value from the public input transcript.
-  -- Outputs 0 if the guard condition fails (or is absent).  1 output.
+  -- Active (guard absent, or guard evaluates to 1) consumes the next
+  -- transcript entry and outputs it; inactive (guard evaluates to 0)
+  -- outputs 0 and consumes nothing.  1 output.
   public-input
     : (guard : Maybe Index)
     → Instruction
 
   -- Retrieve the next value from the private witness transcript.
-  -- Outputs 0 if the guard condition fails (or is absent).  1 output.
+  -- Active (guard absent, or guard evaluates to 1) consumes the next
+  -- transcript entry and outputs it; inactive (guard evaluates to 0)
+  -- outputs 0 and consumes nothing.  1 output.
   private-input
     : (guard : Maybe Index)
     → Instruction

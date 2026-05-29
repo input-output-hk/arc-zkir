@@ -1,19 +1,26 @@
-module zkir-v2.Properties where
+{-# OPTIONS --safe #-}
+open import zkir-v2.Assumptions
 
-open import zkir-v2.Syntax
-open import zkir-v2.Semantics
+module zkir-v2.Properties (⋯ : _) (open Assumptions ⋯) where
+
+open import zkir-v2.Syntax ⋯
+open import zkir-v2.Semantics ⋯
 
 open import Data.Bool    using (Bool; true; false; if_then_else_; _∧_)
 open import Data.List    using (List; []; _∷_; length)
 open import Data.List.Properties using (length-++-≤ˡ)
 open import Data.Maybe   using (Maybe; nothing; just; _>>=_)
-open import Data.Nat     using (ℕ; _≤_)
+open import Data.Nat     using (ℕ; _≤_; _≡ᵇ_)
 open import Data.Nat.Properties  using (≤-trans; ≤-reflexive)
 open import Data.Product using (_×_; _,_; ∃; proj₂)
 open import Data.Maybe.Properties using (just-injective)
 open import Relation.Binary.PropositionalEquality
   using (_≡_; refl; sym; cong; subst)
-open import Function.Bundles using (_↔_)
+-- P5 (circuit faithfulness) is now fully discharged in `CircuitProof`;
+-- we re-export it here (where the spec's §6.2 postulate used to live).
+open import zkir-v2.Circuit ⋯      using (circuit; satisfies)
+open import zkir-v2.Obligations ⋯  using (producer-safe)
+open import zkir-v2.CircuitProof ⋯ using (witness-of; preprocess-shaped; circuit-faithful)
 
 ------------------------------------------------------------------------
 -- Local proof helpers
@@ -43,11 +50,17 @@ private
     → init-state src pre ≡ just s₀
     → Preprocessed.memory s₀ ≡ ProofPreimage.inputs pre
   init-state-memory src pre s₀ eq
-    with IrSource.do-communications-commitment src
+    with length (ProofPreimage.inputs pre) ≡ᵇ IrSource.num-inputs src
+       | IrSource.do-communications-commitment src
        | ProofPreimage.comm-commitment pre
-  ... | false | _      = sym (cong Preprocessed.memory (just-injective eq))
-  ... | true  | just _ = sym (cong Preprocessed.memory (just-injective eq))
-  ... | true  | nothing with eq
+  ... | false | _     | _      with eq
+  ...   | ()
+  init-state-memory src pre s₀ eq
+       | true  | false | _      = sym (cong Preprocessed.memory (just-injective eq))
+  init-state-memory src pre s₀ eq
+       | true  | true  | just _ = sym (cong Preprocessed.memory (just-injective eq))
+  init-state-memory src pre s₀ eq
+       | true  | true  | nothing with eq
   ...   | ()
 
   mem-refl : ∀ {s s' : Preprocessed}
@@ -924,17 +937,30 @@ R→preprocess src pre s (s₀ , init-eq , ris , tc , co)
 ... | instrs-eq rewrite init-eq | instrs-eq | tc | co = refl
 
 ------------------------------------------------------------------------
--- 5. Circuit correctness
--- The Halo2 constraint synthesis (circuit) is faithful to R.
--- A full proof requires modelling the polynomial constraint system.
+-- 5. Circuit correctness (Property P5, spec §6.2)
+--
+-- The Halo2 constraint-synthesis function `circuit` is faithful to the
+-- relational semantics `R`.  This was formerly postulated against an
+-- *opaque* constraint-system model; it is now fully MECHANISED in
+-- `CircuitProof` against the concrete `Circuit` / `satisfies` model and
+-- re-exported here.
+--
+-- The faithful statement carries the two preconditions established
+-- during the mechanisation (both genuinely required — see CircuitProof):
+--
+--   • producer-safety  `producer-safe src ≡ true`               (§6.4)
+--   • input arity      `length (inputs pre) ≡ num-inputs src`    (§3.4, WF1)
+--   • shape            `preprocess-shaped src pre s`             (§5.4)
+--
+-- and concludes the spec's biconditional as a logical equivalence
+-- (`_⇔_`):  `R src pre s ⇔ satisfies (circuit src) (witness-of s pre)`.
+--
+-- `circuit-faithful` is re-exported from `CircuitProof` (see the import
+-- list above); its full statement is:
+--
+--   circuit-faithful : ∀ src pre s
+--     → producer-safe src ≡ true
+--     → length (inputs pre) ≡ num-inputs src
+--     → preprocess-shaped src pre s
+--     → R src pre s ⇔ satisfies (circuit src) (witness-of s pre)
 ------------------------------------------------------------------------
-
-postulate
-  -- An opaque type for the Halo2 constraint system produced by circuit.
-  ConstraintSystem : Set
-  -- circuit produces a constraint system from source and preimage.
-  circuit : IrSource → ProofPreimage → ConstraintSystem
-  -- A preprocessed state satisfies a constraint system.
-  satisfies : ConstraintSystem → Preprocessed → Set
-  -- circuit is faithful to the relational semantics.
-  circuit-faithful : ∀ src pre s → R src pre s ↔ satisfies (circuit src pre) s
