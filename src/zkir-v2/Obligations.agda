@@ -60,10 +60,6 @@ insert i js = i ∷ js     -- duplicates harmless; lookup is by `_≡ᵇ_`.
 PartialMap : Set
 PartialMap = List (Index × ℕ)
 
-domᵐ? : Index → PartialMap → Bool
-domᵐ? _ []             = false
-domᵐ? i ((j , _) ∷ ps) = (i ≡ᵇ j) ∨ domᵐ? i ps
-
 -- `lookupᵐ i ps` returns the most-recently-inserted value at `i`, or
 -- `nothing` if `i` is not in the map.  Used by the obligation checks
 -- below.
@@ -256,12 +252,6 @@ O2 src with O2-scan (IrSource.instructions src) (IrSource.num-inputs src , [])
 -- apply without an additional `FR-BITS ≡ FR-bits-bound` postulate.
 FR-bits-bound : ℕ
 FR-bits-bound = FR-BITS
-
--- `bit_length k` would require turning `Fr` into ℕ.  For the
--- conservative checker, we treat every `LoadImm` as carrying
--- `FR-bits-bound` bits unless future refinement supplies tighter info.
-load-imm-bits : Fr → ℕ
-load-imm-bits _ = FR-bits-bound
 
 -- One step of the obligation check.  Returns `nothing` on failure.
 O3-check : Instruction → PartialMap → Bool

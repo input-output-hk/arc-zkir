@@ -2931,6 +2931,79 @@ next-state-from-osd (private-input _) _ s _ _ (w , _ , _ , (true , _ , (s₁ , _
 next-state-from-osd (private-input _) _ s _ _ (w , _ , _ , (false , _ , _)) =
   record s { memory = Preprocessed.memory s ++ (w ∷ []) }
 
+-- Reshape the split-off new-clause satisfaction (`sat-new`, from
+-- `satisfies-clauses-split`) into the exact shape every per-instruction
+-- `*-bwd` lemma expects.  Two orthogonal rewrites, shared verbatim by
+-- every push-mem / push-mem2 case of D1 below:
+--   • shift the clause's wire index `n` to `length (memory s)`, via the
+--     memory invariant `mi : n ≡ length (memory s)`; and
+--   • drop the trailing `++ []` on the witness's pis (every non-pis
+--     instruction has `pis-suf = []`).
+-- `ms` is the memory suffix the instruction appends (`w ∷ []` for Δmem=1,
+-- `x ∷ y ∷ []` for Δmem=2).
+private
+  reshape-core
+    : ∀ {hc} {rand : Maybe Fr} (s : Preprocessed) (instr : Instruction)
+        (ms : List Fr) {n : ℕ}
+    → n ≡ length (Preprocessed.memory s)
+    → satisfies-clauses (single-instr-clauses hc n instr)
+        (mk-witness (Preprocessed.memory s ++ ms)
+                    (Preprocessed.pis s ++ []) rand)
+    → satisfies-clauses
+        (single-instr-clauses hc (length (Preprocessed.memory s)) instr)
+        (mk-witness (Preprocessed.memory s ++ ms)
+                    (Preprocessed.pis s) rand)
+  reshape-core {hc} {rand} s instr ms mi sat =
+    subst (λ p → satisfies-clauses
+                   (single-instr-clauses hc (length (Preprocessed.memory s)) instr)
+                   (mk-witness (Preprocessed.memory s ++ ms) p rand))
+          (++-identityʳ (Preprocessed.pis s))
+          (subst (λ k → satisfies-clauses
+                          (single-instr-clauses hc k instr)
+                          (mk-witness (Preprocessed.memory s ++ ms)
+                                      (Preprocessed.pis s ++ []) rand))
+                 mi sat)
+
+  -- Δmem=2 variant: additionally bridge the witness memory from the
+  -- `mem ++ (x ∷ y ∷ [])` form (produced by `op-side-data`) to the
+  -- iterated `(mem ++ (x ∷ [])) ++ (y ∷ [])` form the `*-bwd` lemmas use.
+  reshape-push2
+    : ∀ {hc} {rand : Maybe Fr} (s : Preprocessed) (instr : Instruction)
+        (x y : Fr) {n : ℕ}
+    → n ≡ length (Preprocessed.memory s)
+    → satisfies-clauses (single-instr-clauses hc n instr)
+        (mk-witness (Preprocessed.memory s ++ (x ∷ y ∷ []))
+                    (Preprocessed.pis s ++ []) rand)
+    → satisfies-clauses
+        (single-instr-clauses hc (length (Preprocessed.memory s)) instr)
+        (mk-witness ((Preprocessed.memory s ++ (x ∷ [])) ++ (y ∷ []))
+                    (Preprocessed.pis s) rand)
+  reshape-push2 {hc} {rand} s instr x y mi sat =
+    subst (λ m → satisfies-clauses
+                   (single-instr-clauses hc (length (Preprocessed.memory s)) instr)
+                   (mk-witness m (Preprocessed.pis s) rand))
+          (push-mem2-assoc (Preprocessed.memory s) x y)
+          (reshape-core {hc} {rand} s instr (x ∷ y ∷ []) mi sat)
+
+  -- Δmem=0 variant: the instruction grows neither memory nor pis, so in
+  -- addition to the index shift and pis-drop we also drop the trailing
+  -- `++ []` on the witness memory.
+  reshape-nogrow
+    : ∀ {hc} {rand : Maybe Fr} (s : Preprocessed) (instr : Instruction) {n : ℕ}
+    → n ≡ length (Preprocessed.memory s)
+    → satisfies-clauses (single-instr-clauses hc n instr)
+        (mk-witness (Preprocessed.memory s ++ [])
+                    (Preprocessed.pis s ++ []) rand)
+    → satisfies-clauses
+        (single-instr-clauses hc (length (Preprocessed.memory s)) instr)
+        (mk-witness (Preprocessed.memory s) (Preprocessed.pis s) rand)
+  reshape-nogrow {hc} {rand} s instr mi sat =
+    subst (λ m → satisfies-clauses
+                   (single-instr-clauses hc (length (Preprocessed.memory s)) instr)
+                   (mk-witness m (Preprocessed.pis s) rand))
+          (++-identityʳ (Preprocessed.memory s))
+          (reshape-core {hc} {rand} s instr [] mi sat)
+
 -- Per-instruction backward step.  Returns a Σ existential because the
 -- post-state `s'` is recovered from the satisfaction witness's memory
 -- shape; each case applies the appropriate `*-bwd` lemma.
@@ -2998,34 +3071,16 @@ satisfies→R-instr-step {hc} pre s (add a b) st _ _ mi pii wc _ _ _ _ ((w , ref
                       (SynthState.clauses st)
                       (clause-add n a b ∷ [])
                       sat
-      hold-add , _ = sat-new
-      av      = proj₁ hold-add
-      bv      = proj₁ (proj₂ hold-add)
-      la-post = proj₁ (proj₂ (proj₂ (proj₂ hold-add)))
-      lb-post = proj₁ (proj₂ (proj₂ (proj₂ (proj₂ hold-add))))
+      (av , bv , _ , la-post , lb-post , _) , _ = sat-new
       la-pre  : mem-lookup mem a ≡ just av
       la-pre  = lookup-shrink mem (w ∷ []) a la-post a≤len
       lb-pre  : mem-lookup mem b ≡ just bv
       lb-pre  = lookup-shrink mem (w ∷ []) b lb-post b≤len
-      -- Re-shape `sat-new` to use `length mem` (≡ n) for add-bwd.
-      sat-shifted : satisfies-clauses
-                      (single-instr-clauses hc (length mem) (add a b))
-                      (mk-witness (mem ++ (w ∷ [])) (Preprocessed.pis s ++ [])
-                                  (comm-rand-of pre))
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-add k a b ∷ [])
-                                    (mk-witness (mem ++ (w ∷ [])) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
       _ , r-add-ev = add-bwd {pre = pre} {s = s} {a = a} {b = b}
                               {av = av} {bv = bv} {v = w} {hc = hc}
                               {rand = comm-rand-of pre}
                               la-pre lb-pre
-                              (subst (λ p → satisfies-clauses
-                                              (single-instr-clauses hc (length mem) (add a b))
-                                              (mk-witness (mem ++ (w ∷ [])) p (comm-rand-of pre)))
-                                     (++-identityʳ (Preprocessed.pis s))
-                                     sat-shifted)
+                              (reshape-core {hc} {comm-rand-of pre} s (add a b) (w ∷ []) mi sat-new)
       s' = push-mem s w
       pis-eq : Preprocessed.pis s' ≡ Preprocessed.pis s ++ []
       pis-eq = sym (++-identityʳ (Preprocessed.pis s))
@@ -3041,22 +3096,10 @@ satisfies→R-instr-step {hc} pre s (mul a b) st _ _ mi pii wc _ _ _ _ ((w , ref
       b≤len  = subst (suc b Data.Nat.≤_) mi (<ᵇ-to-≤ b n b<n)
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st) (clause-mul n a b ∷ []) sat
-      hold-mul , _ = sat-new
-      av      = proj₁ hold-mul
-      bv      = proj₁ (proj₂ hold-mul)
-      la-post = proj₁ (proj₂ (proj₂ (proj₂ hold-mul)))
-      lb-post = proj₁ (proj₂ (proj₂ (proj₂ (proj₂ hold-mul))))
+      (av , bv , _ , la-post , lb-post , _) , _ = sat-new
       la-pre  = lookup-shrink mem (w ∷ []) a la-post a≤len
       lb-pre  = lookup-shrink mem (w ∷ []) b lb-post b≤len
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-mul k a b ∷ [])
-                                    (mk-witness (mem ++ (w ∷ [])) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (mul a b))
-                                (mk-witness (mem ++ (w ∷ [])) p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-shifted
+      sat-pis = reshape-core {hc} {comm-rand-of pre} s (mul a b) (w ∷ []) mi sat-new
       _ , r-ev = mul-bwd {pre = pre} {s = s} {a = a} {b = b}
                           {av = av} {bv = bv} {v = w} {hc = hc}
                           {rand = comm-rand-of pre}
@@ -3071,19 +3114,9 @@ satisfies→R-instr-step {hc} pre s (neg a) st _ _ mi pii wc _ _ _ _ ((w , refl)
       a≤len  = subst (suc a Data.Nat.≤_) mi (<ᵇ-to-≤ a n wc)
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st) (clause-neg n a ∷ []) sat
-      hold-neg , _ = sat-new
-      av      = proj₁ hold-neg
-      la-post = proj₁ (proj₂ (proj₂ hold-neg))
+      (av , _ , la-post , _) , _ = sat-new
       la-pre  = lookup-shrink mem (w ∷ []) a la-post a≤len
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-neg k a ∷ [])
-                                    (mk-witness (mem ++ (w ∷ [])) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (neg a))
-                                (mk-witness (mem ++ (w ∷ [])) p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-shifted
+      sat-pis = reshape-core {hc} {comm-rand-of pre} s (neg a) (w ∷ []) mi sat-new
       _ , r-ev = neg-bwd {pre = pre} {s = s} {a = a}
                           {av = av} {v = w} {hc = hc}
                           {rand = comm-rand-of pre}
@@ -3101,22 +3134,10 @@ satisfies→R-instr-step {hc} pre s (test-eq a b) st _ _ mi pii wc _ _ _ _ ((w ,
       b≤len  = subst (suc b Data.Nat.≤_) mi (<ᵇ-to-≤ b n b<n)
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st) (clause-test-eq n a b ∷ []) sat
-      hold-te , _ = sat-new
-      av      = proj₁ hold-te
-      bv      = proj₁ (proj₂ hold-te)
-      la-post = proj₁ (proj₂ (proj₂ (proj₂ hold-te)))
-      lb-post = proj₁ (proj₂ (proj₂ (proj₂ (proj₂ hold-te))))
+      (av , bv , _ , la-post , lb-post , _) , _ = sat-new
       la-pre  = lookup-shrink mem (w ∷ []) a la-post a≤len
       lb-pre  = lookup-shrink mem (w ∷ []) b lb-post b≤len
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-test-eq k a b ∷ [])
-                                    (mk-witness (mem ++ (w ∷ [])) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (test-eq a b))
-                                (mk-witness (mem ++ (w ∷ [])) p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-shifted
+      sat-pis = reshape-core {hc} {comm-rand-of pre} s (test-eq a b) (w ∷ []) mi sat-new
       _ , r-ev = test-eq-bwd {pre = pre} {s = s} {a = a} {b = b}
                               {av = av} {bv = bv} {v = w} {hc = hc}
                               {rand = comm-rand-of pre}
@@ -3131,19 +3152,9 @@ satisfies→R-instr-step {hc} pre s (copy v) st _ _ mi pii wc _ _ _ _ ((w , refl
       v≤len  = subst (suc v Data.Nat.≤_) mi (<ᵇ-to-≤ v n wc)
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st) (clause-copy n v ∷ []) sat
-      hold-cp , _ = sat-new
-      vv      = proj₁ hold-cp
-      la-post = proj₁ (proj₂ (proj₂ hold-cp))
+      (vv , _ , la-post , _) , _ = sat-new
       la-pre  = lookup-shrink mem (w ∷ []) v la-post v≤len
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-copy k v ∷ [])
-                                    (mk-witness (mem ++ (w ∷ [])) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (copy v))
-                                (mk-witness (mem ++ (w ∷ [])) p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-shifted
+      sat-pis = reshape-core {hc} {comm-rand-of pre} s (copy v) (w ∷ []) mi sat-new
       _ , r-ev = copy-bwd {pre = pre} {s = s} {v = v} {vv = vv} {w = w} {hc = hc}
                            {rand = comm-rand-of pre}
                            la-pre sat-pis
@@ -3161,11 +3172,7 @@ satisfies→R-instr-step {hc} pre s (constrain-eq a b) st _ _ mi pii wc _ _ _ _ 
       b≤len  = subst (suc b Data.Nat.≤_) mi (<ᵇ-to-≤ b n b<n)
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st) (clause-eq a b ∷ []) sat
-      hold-eq , _ = sat-new
-      av      = proj₁ hold-eq
-      bv      = proj₁ (proj₂ hold-eq)
-      la-post = proj₁ (proj₂ (proj₂ hold-eq))
-      lb-post = proj₁ (proj₂ (proj₂ (proj₂ hold-eq)))
+      (av , bv , la-post , lb-post , _) , _ = sat-new
       -- `mem ++ [] = mem` only via subst with ++-identityʳ.
       la-eq : mem-lookup mem a ≡ just av
       la-eq = subst (λ m → mem-lookup m a ≡ just av)
@@ -3173,19 +3180,7 @@ satisfies→R-instr-step {hc} pre s (constrain-eq a b) st _ _ mi pii wc _ _ _ _ 
       lb-eq : mem-lookup mem b ≡ just bv
       lb-eq = subst (λ m → mem-lookup m b ≡ just bv)
                     (++-identityʳ mem) lb-post
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-eq a b ∷ [])
-                                    (mk-witness (mem ++ []) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-mem = subst (λ m → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (constrain-eq a b))
-                                (mk-witness m (Preprocessed.pis s ++ []) (comm-rand-of pre)))
-                      (++-identityʳ mem) sat-shifted
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (constrain-eq a b))
-                                (mk-witness mem p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-mem
+      sat-pis = reshape-nogrow {hc} {comm-rand-of pre} s (constrain-eq a b) mi sat-new
       r-ev = constrain-eq-bwd {pre = pre} {s = s} {a = a} {b = b}
                                {av = av} {bv = bv} {hc = hc}
                                {rand = comm-rand-of pre}
@@ -3203,25 +3198,11 @@ satisfies→R-instr-step {hc} pre s (constrain-bits v bits) st _ _ mi pii wc _ _
       v≤len  = subst (suc v Data.Nat.≤_) mi (<ᵇ-to-≤ v n wc)
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st) (clause-range-bits v bits ∷ []) sat
-      hold-rb , _ = sat-new
-      vv      = proj₁ hold-rb
-      la-post = proj₁ (proj₂ hold-rb)
+      (vv , la-post , _) , _ = sat-new
       la-eq : mem-lookup mem v ≡ just vv
       la-eq = subst (λ m → mem-lookup m v ≡ just vv)
                     (++-identityʳ mem) la-post
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-range-bits v bits ∷ [])
-                                    (mk-witness (mem ++ []) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-mem = subst (λ m → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (constrain-bits v bits))
-                                (mk-witness m (Preprocessed.pis s ++ []) (comm-rand-of pre)))
-                      (++-identityʳ mem) sat-shifted
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (constrain-bits v bits))
-                                (mk-witness mem p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-mem
+      sat-pis = reshape-nogrow {hc} {comm-rand-of pre} s (constrain-bits v bits) mi sat-new
       r-ev = constrain-bits-bwd {pre = pre} {s = s} {v = v} {n = bits}
                                  {vv = vv} {hc = hc} {rand = comm-rand-of pre}
                                  la-eq sat-pis
@@ -3232,22 +3213,9 @@ satisfies→R-instr-step {hc} pre s (constrain-bits v bits) st _ _ mi pii wc _ _
 -- ─── constrain-to-boolean(v) ──────────────────────────────────────
 satisfies→R-instr-step {hc} pre s (constrain-to-boolean v) st _ _ mi pii wc _ _ _ _ (refl , refl) sat =
   let mem    = Preprocessed.memory s
-      n      = SynthState.nr-wires st
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st) (clause-bool v ∷ []) sat
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-bool v ∷ [])
-                                    (mk-witness (mem ++ []) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-mem = subst (λ m → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (constrain-to-boolean v))
-                                (mk-witness m (Preprocessed.pis s ++ []) (comm-rand-of pre)))
-                      (++-identityʳ mem) sat-shifted
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (constrain-to-boolean v))
-                                (mk-witness mem p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-mem
+      sat-pis = reshape-nogrow {hc} {comm-rand-of pre} s (constrain-to-boolean v) mi sat-new
       r-ev = constrain-to-boolean-bwd {pre = pre} {s = s} {v = v} {hc = hc}
                                        {rand = comm-rand-of pre} sat-pis
       mem-eq = sym (++-identityʳ mem)
@@ -3257,19 +3225,10 @@ satisfies→R-instr-step {hc} pre s (constrain-to-boolean v) st _ _ mi pii wc _ 
 -- ─── load-imm(imm) ─────────────────────────────────────────────────
 -- No operand wire-check; wire-check always = true for load-imm.
 satisfies→R-instr-step {hc} pre s (load-imm imm) st _ _ mi pii wc _ _ _ _ ((w , refl) , refl) sat =
-  let mem    = Preprocessed.memory s
-      n      = SynthState.nr-wires st
+  let n      = SynthState.nr-wires st
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st) (clause-load-imm n imm ∷ []) sat
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-load-imm k imm ∷ [])
-                                    (mk-witness (mem ++ (w ∷ [])) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (load-imm imm))
-                                (mk-witness (mem ++ (w ∷ [])) p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-shifted
+      sat-pis = reshape-core {hc} {comm-rand-of pre} s (load-imm imm) (w ∷ []) mi sat-new
       _ , r-ev = load-imm-bwd {pre = pre} {s = s} {k = imm} {w = w} {hc = hc}
                                {rand = comm-rand-of pre}
                                sat-pis
@@ -3287,22 +3246,11 @@ satisfies→R-instr-step {hc} pre s (transient-hash inputs) st _ _ mi pii wc _ _
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st)
                       (clause-transient-hash n inputs ∷ []) sat
-      hold-th , _ = sat-new
-      vs       = proj₁ hold-th
-      ov       = proj₁ (proj₂ hold-th)
-      lvs-post = proj₁ (proj₂ (proj₂ hold-th))
+      (vs , ov , lvs-post , _) , _ = sat-new
       -- Convert the input-vector lookup back to pre-state via mem-lookups-shrink.
       lvs-pre  : mem-lookups mem inputs ≡ just vs
       lvs-pre  = mem-lookups-shrink mem (w ∷ []) inputs wc-len lvs-post
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-transient-hash k inputs ∷ [])
-                                    (mk-witness (mem ++ (w ∷ [])) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (transient-hash inputs))
-                                (mk-witness (mem ++ (w ∷ [])) p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-shifted
+      sat-pis = reshape-core {hc} {comm-rand-of pre} s (transient-hash inputs) (w ∷ []) mi sat-new
       w≡hash , r-ev = transient-hash-bwd {pre = pre} {s = s} {inputs = inputs}
                                      {vs = vs} {v = w} {hc = hc}
                                      {rand = comm-rand-of pre}
@@ -3327,25 +3275,11 @@ satisfies→R-instr-step {hc} pre s (cond-select b a c) st _ _ mi pii wc _ _ _ _
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st)
                       (clause-cond-select n b a c ∷ []) sat
-      hold-cs , _ = sat-new
-      bv       = proj₁ hold-cs
-      av       = proj₁ (proj₂ hold-cs)
-      cv       = proj₁ (proj₂ (proj₂ hold-cs))
-      lb-post  = proj₁ (proj₂ (proj₂ (proj₂ (proj₂ hold-cs))))
-      la-post  = proj₁ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ hold-cs)))))
-      lc-post  = proj₁ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ hold-cs))))))
+      (bv , av , cv , _ , lb-post , la-post , lc-post , _) , _ = sat-new
       lb-pre   = lookup-shrink mem (w ∷ []) b lb-post b≤len
       la-pre   = lookup-shrink mem (w ∷ []) a la-post a≤len
       lc-pre   = lookup-shrink mem (w ∷ []) c lc-post c≤len
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-cond-select k b a c ∷ [])
-                                    (mk-witness (mem ++ (w ∷ [])) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (cond-select b a c))
-                                (mk-witness (mem ++ (w ∷ [])) p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-shifted
+      sat-pis = reshape-core {hc} {comm-rand-of pre} s (cond-select b a c) (w ∷ []) mi sat-new
       r-ev = cond-select-bwd {pre = pre} {s = s} {b = b} {a = a} {c = c}
                               {bv = bv} {av = av} {cv = cv} {v = w} {hc = hc}
                               {rand = comm-rand-of pre}
@@ -3363,27 +3297,11 @@ satisfies→R-instr-step {hc} pre s (hash-to-curve inputs) st _ _ mi pii wc _ _ 
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st)
                       (clause-hash-to-curve n (suc n) inputs ∷ []) sat
-      hold-htc , _ = sat-new
-      vs       = proj₁ hold-htc
-      lvs-post = proj₁ (proj₂ (proj₂ (proj₂ hold-htc)))
+      (vs , _ , _ , lvs-post , _) , _ = sat-new
       lvs-pre  : mem-lookups mem inputs ≡ just vs
       lvs-pre  = mem-lookups-shrink mem (x ∷ y ∷ []) inputs wc-len lvs-post
       -- Shift n → length mem in the clause.
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-hash-to-curve k (suc k) inputs ∷ [])
-                                    (mk-witness (mem ++ (x ∷ y ∷ [])) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      -- Drop the pis-suf = [].
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (hash-to-curve inputs))
-                                (mk-witness (mem ++ (x ∷ y ∷ [])) p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-shifted
-      -- Convert push-mem2 form to iterated push-mem form for the bwd lemma.
-      sat-assoc = subst (λ m → satisfies-clauses
-                                  (single-instr-clauses hc (length mem) (hash-to-curve inputs))
-                                  (mk-witness m (Preprocessed.pis s) (comm-rand-of pre)))
-                        (push-mem2-assoc mem x y) sat-pis
+      sat-assoc = reshape-push2 {hc} {comm-rand-of pre} s (hash-to-curve inputs) x y mi sat-new
       _ , r-ev = hash-to-curve-bwd {pre = pre} {s = s} {inputs = inputs}
                                     {vs = vs} {x = x} {y = y} {hc = hc}
                                     {rand = comm-rand-of pre}
@@ -3400,24 +3318,10 @@ satisfies→R-instr-step {hc} pre s (persistent-hash α inputs) st _ _ mi pii wc
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st)
                       (clause-persistent-hash n (suc n) α inputs ∷ []) sat
-      hold-ph , _ = sat-new
-      vs       = proj₁ hold-ph
-      lvs-post = proj₁ (proj₂ (proj₂ (proj₂ hold-ph)))
+      (vs , _ , _ , lvs-post , _) , _ = sat-new
       lvs-pre  : mem-lookups mem inputs ≡ just vs
       lvs-pre  = mem-lookups-shrink mem (x ∷ y ∷ []) inputs wc-len lvs-post
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-persistent-hash k (suc k) α inputs ∷ [])
-                                    (mk-witness (mem ++ (x ∷ y ∷ [])) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (persistent-hash α inputs))
-                                (mk-witness (mem ++ (x ∷ y ∷ [])) p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-shifted
-      sat-assoc = subst (λ m → satisfies-clauses
-                                  (single-instr-clauses hc (length mem) (persistent-hash α inputs))
-                                  (mk-witness m (Preprocessed.pis s) (comm-rand-of pre)))
-                        (push-mem2-assoc mem x y) sat-pis
+      sat-assoc = reshape-push2 {hc} {comm-rand-of pre} s (persistent-hash α inputs) x y mi sat-new
       _ , r-ev = persistent-hash-bwd {pre = pre} {s = s} {α = α} {inputs = inputs}
                                       {vs = vs} {x = x} {y = y} {hc = hc}
                                       {rand = comm-rand-of pre}
@@ -3440,32 +3344,12 @@ satisfies→R-instr-step {hc} pre s (ec-add a-x a-y b-x b-y) st _ _ mi pii wc _ 
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st)
                       (clause-ec-add n (suc n) a-x a-y b-x b-y ∷ []) sat
-      hold-ea , _ = sat-new
-      ax = proj₁ hold-ea
-      ay = proj₁ (proj₂ hold-ea)
-      bx = proj₁ (proj₂ (proj₂ hold-ea))
-      by = proj₁ (proj₂ (proj₂ (proj₂ hold-ea)))
-      lax-post = proj₁ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ hold-ea))))))
-      lay-post = proj₁ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ hold-ea)))))))
-      lbx-post = proj₁ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ hold-ea))))))))
-      lby-post = proj₁ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ hold-ea)))))))))
+      (ax , ay , bx , by , _ , _ , lax-post , lay-post , lbx-post , lby-post , _) , _ = sat-new
       lax-pre  = lookup-shrink mem (x ∷ y ∷ []) a-x lax-post ax≤len
       lay-pre  = lookup-shrink mem (x ∷ y ∷ []) a-y lay-post ay≤len
       lbx-pre  = lookup-shrink mem (x ∷ y ∷ []) b-x lbx-post bx≤len
       lby-pre  = lookup-shrink mem (x ∷ y ∷ []) b-y lby-post by≤len
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-ec-add k (suc k) a-x a-y b-x b-y ∷ [])
-                                    (mk-witness (mem ++ (x ∷ y ∷ [])) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (ec-add a-x a-y b-x b-y))
-                                (mk-witness (mem ++ (x ∷ y ∷ [])) p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-shifted
-      sat-assoc = subst (λ m → satisfies-clauses
-                                  (single-instr-clauses hc (length mem) (ec-add a-x a-y b-x b-y))
-                                  (mk-witness m (Preprocessed.pis s) (comm-rand-of pre)))
-                        (push-mem2-assoc mem x y) sat-pis
+      sat-assoc = reshape-push2 {hc} {comm-rand-of pre} s (ec-add a-x a-y b-x b-y) x y mi sat-new
       _ , r-ev = ec-add-bwd {pre = pre} {s = s}
                              {a-x = a-x} {a-y = a-y} {b-x = b-x} {b-y = b-y}
                              {ax = ax} {ay = ay} {bx = bx} {by = by}
@@ -3488,29 +3372,11 @@ satisfies→R-instr-step {hc} pre s (ec-mul a-x a-y scalar) st _ _ mi pii wc _ _
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st)
                       (clause-ec-mul n (suc n) a-x a-y scalar ∷ []) sat
-      hold-em , _ = sat-new
-      ax = proj₁ hold-em
-      ay = proj₁ (proj₂ hold-em)
-      sc = proj₁ (proj₂ (proj₂ hold-em))
-      lax-post = proj₁ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ hold-em)))))
-      lay-post = proj₁ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ hold-em))))))
-      lsc-post = proj₁ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ hold-em)))))))
+      (ax , ay , sc , _ , _ , lax-post , lay-post , lsc-post , _) , _ = sat-new
       lax-pre  = lookup-shrink mem (x ∷ y ∷ []) a-x lax-post ax≤len
       lay-pre  = lookup-shrink mem (x ∷ y ∷ []) a-y lay-post ay≤len
       lsc-pre  = lookup-shrink mem (x ∷ y ∷ []) scalar lsc-post sc≤len
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-ec-mul k (suc k) a-x a-y scalar ∷ [])
-                                    (mk-witness (mem ++ (x ∷ y ∷ [])) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (ec-mul a-x a-y scalar))
-                                (mk-witness (mem ++ (x ∷ y ∷ [])) p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-shifted
-      sat-assoc = subst (λ m → satisfies-clauses
-                                  (single-instr-clauses hc (length mem) (ec-mul a-x a-y scalar))
-                                  (mk-witness m (Preprocessed.pis s) (comm-rand-of pre)))
-                        (push-mem2-assoc mem x y) sat-pis
+      sat-assoc = reshape-push2 {hc} {comm-rand-of pre} s (ec-mul a-x a-y scalar) x y mi sat-new
       _ , r-ev = ec-mul-bwd {pre = pre} {s = s}
                              {a-x = a-x} {a-y = a-y} {scalar = scalar}
                              {ax = ax} {ay = ay} {sc = sc}
@@ -3528,23 +3394,9 @@ satisfies→R-instr-step {hc} pre s (ec-mul-generator scalar) st _ _ mi pii wc _
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st)
                       (clause-ec-mul-generator n (suc n) scalar ∷ []) sat
-      hold-eg , _ = sat-new
-      sc = proj₁ hold-eg
-      lsc-post = proj₁ (proj₂ (proj₂ (proj₂ hold-eg)))
+      (sc , _ , _ , lsc-post , _) , _ = sat-new
       lsc-pre  = lookup-shrink mem (x ∷ y ∷ []) scalar lsc-post sc≤len
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-ec-mul-generator k (suc k) scalar ∷ [])
-                                    (mk-witness (mem ++ (x ∷ y ∷ [])) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (ec-mul-generator scalar))
-                                (mk-witness (mem ++ (x ∷ y ∷ [])) p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-shifted
-      sat-assoc = subst (λ m → satisfies-clauses
-                                  (single-instr-clauses hc (length mem) (ec-mul-generator scalar))
-                                  (mk-witness m (Preprocessed.pis s) (comm-rand-of pre)))
-                        (push-mem2-assoc mem x y) sat-pis
+      sat-assoc = reshape-push2 {hc} {comm-rand-of pre} s (ec-mul-generator scalar) x y mi sat-new
       _ , r-ev = ec-mul-generator-bwd {pre = pre} {s = s} {scalar = scalar}
                                        {sc = sc} {x = x} {y = y} {hc = hc}
                                        {rand = comm-rand-of pre}
@@ -3564,23 +3416,9 @@ satisfies→R-instr-step {hc} pre s (div-mod-power-of-two var bits) st _ _ mi pi
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st)
                       (clause-div-mod n (suc n) var bits ∷ []) sat
-      hold-dm , _ = sat-new
-      vv       = proj₁ (proj₂ (proj₂ hold-dm))
-      la-post  = proj₁ (proj₂ (proj₂ (proj₂ (proj₂ (proj₂ hold-dm)))))
+      (_ , _ , vv , _ , _ , la-post , _) , _ = sat-new
       la-pre   = lookup-shrink mem (x ∷ y ∷ []) var la-post v≤len
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-div-mod k (suc k) var bits ∷ [])
-                                    (mk-witness (mem ++ (x ∷ y ∷ [])) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (div-mod-power-of-two var bits))
-                                (mk-witness (mem ++ (x ∷ y ∷ [])) p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-shifted
-      sat-assoc = subst (λ m → satisfies-clauses
-                                  (single-instr-clauses hc (length mem) (div-mod-power-of-two var bits))
-                                  (mk-witness m (Preprocessed.pis s) (comm-rand-of pre)))
-                        (push-mem2-assoc mem x y) sat-pis
+      sat-assoc = reshape-push2 {hc} {comm-rand-of pre} s (div-mod-power-of-two var bits) x y mi sat-new
       x≡cq , y≡cr , r-ev = div-mod-power-of-two-bwd
                               {pre = pre} {s = s} {var = var} {bits = bits}
                               {vv = vv} {x = x} {y = y} {hc = hc}
@@ -3623,9 +3461,7 @@ satisfies→R-instr-step {hc} pre s (declare-pub-input v) st _ _ mi pii wc _ _ _
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st)
                       (clause-pi-from-wire (preamble-pi-count hc + d) v ∷ []) sat
-      hold-pi , _ = sat-new
-      wv'      = proj₁ hold-pi
-      lv-post  = proj₁ (proj₂ (proj₂ hold-pi))
+      (wv' , _ , lv-post , _) , _ = sat-new
       -- Pre-state lookup: mem unchanged so mem-suf = [] gives `mem ++ [] = mem`.
       lv-pre : mem-lookup mem v ≡ just wv'
       lv-pre = subst (λ m → mem-lookup m v ≡ just wv')
@@ -3671,10 +3507,7 @@ satisfies→R-instr-step {hc} pre s (assert c) st _ _ mi pii wc
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st)
                       (clause-assert-non-zero c ∷ []) sat
-      hold-as , _ = sat-new
-      v       = proj₁ hold-as
-      lv-post = proj₁ (proj₂ hold-as)
-      v≢0     = proj₂ (proj₂ hold-as)
+      (v , lv-post , v≢0) , _ = sat-new
       -- Pre-state lookup for `c`.
       lv-pre : mem-lookup mem c ≡ just v
       lv-pre = subst (λ m → mem-lookup m c ≡ just v)
@@ -3686,19 +3519,7 @@ satisfies→R-instr-step {hc} pre s (assert c) st _ _ mi pii wc
       is-bit-v = o2-known-is-bit {bk = bk} o2-inv mem?c lv-pre
       -- Build sat suitable for `assert-bwd`:  shape  (mem, pis, rand)
       -- with the clauses re-shaped to use `length mem`.
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-assert-non-zero c ∷ [])
-                                    (mk-witness (mem ++ []) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-mem = subst (λ m → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (assert c))
-                                (mk-witness m (Preprocessed.pis s ++ []) (comm-rand-of pre)))
-                      (++-identityʳ mem) sat-shifted
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (assert c))
-                                (mk-witness mem p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-mem
+      sat-pis = reshape-nogrow {hc} {comm-rand-of pre} s (assert c) mi sat-new
       r-ev = assert-bwd {pre = pre} {s = s} {c = c} {v = v} {hc = hc}
                          {rand = comm-rand-of pre}
                          lv-pre is-bit-v sat-pis
@@ -3720,9 +3541,7 @@ satisfies→R-instr-step {hc} pre s (not a) st _ _ mi pii wc
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st)
                       (clause-not n a ∷ []) sat
-      hold-not , _ = sat-new
-      av        = proj₁ hold-not
-      la-post   = proj₁ (proj₂ (proj₂ hold-not))
+      (av , _ , la-post , _) , _ = sat-new
       la-pre    : mem-lookup mem a ≡ just av
       la-pre    = lookup-shrink mem (w ∷ []) a la-post a≤len
       -- Extract `mem? a bk ≡ true` from `O2-check ≡ just bk`.
@@ -3731,15 +3550,7 @@ satisfies→R-instr-step {hc} pre s (not a) st _ _ mi pii wc
       -- Apply `o2-known-is-bit` to get `is-bit av`.
       is-bit-av = o2-known-is-bit {bk = bk} o2-inv mem?a la-pre
       -- Re-shape the new-clauses satisfaction for `not-bwd`.
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-not k a ∷ [])
-                                    (mk-witness (mem ++ (w ∷ [])) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (not a))
-                                (mk-witness (mem ++ (w ∷ [])) p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-shifted
+      sat-pis = reshape-core {hc} {comm-rand-of pre} s (not a) (w ∷ []) mi sat-new
       w≡target , r-ev = not-bwd {pre = pre} {s = s} {a = a} {av = av} {v = w} {hc = hc}
                           {rand = comm-rand-of pre}
                           la-pre is-bit-av sat-pis
@@ -3770,11 +3581,7 @@ satisfies→R-instr-step {hc} pre s (less-than a b bits) st _ _ mi pii wc
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st)
                       (clause-less-than n a b bits ∷ []) sat
-      hold-lt , _ = sat-new
-      av      = proj₁ hold-lt
-      bv      = proj₁ (proj₂ hold-lt)
-      la-post = proj₁ (proj₂ (proj₂ (proj₂ hold-lt)))
-      lb-post = proj₁ (proj₂ (proj₂ (proj₂ (proj₂ hold-lt))))
+      (av , bv , _ , la-post , lb-post , _) , _ = sat-new
       la-pre  = lookup-shrink mem (w ∷ []) a la-post a≤len
       lb-pre  = lookup-shrink mem (w ∷ []) b lb-post b≤len
       -- Extract fits-in av ka via O3-Inv, then pad to fits-in av bits.
@@ -3786,15 +3593,7 @@ satisfies→R-instr-step {hc} pre s (less-than a b bits) st _ _ mi pii wc
       fits-av = fits-in-mono fits-av-ka (≤ᵇ-to-≤ ka bits ka≤b)
       fits-bv : fits-in bv bits ≡ true
       fits-bv = fits-in-mono fits-bv-kb (≤ᵇ-to-≤ kb bits kb≤b)
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-less-than k a b bits ∷ [])
-                                    (mk-witness (mem ++ (w ∷ [])) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (less-than a b bits))
-                                (mk-witness (mem ++ (w ∷ [])) p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-shifted
+      sat-pis = reshape-core {hc} {comm-rand-of pre} s (less-than a b bits) (w ∷ []) mi sat-new
       w≡target , r-ev = less-than-bwd
                           {pre = pre} {s = s} {a = a} {b = b} {bits = bits}
                           {av = av} {bv = bv} {v = w} {hc = hc}
@@ -3827,11 +3626,7 @@ satisfies→R-instr-step {hc} pre s (reconstitute-field d m bits) st _ _ mi pii 
       _ , sat-new = satisfies-clauses-split
                       (SynthState.clauses st)
                       (clause-reconstitute n d m bits ∷ []) sat
-      hold-rc , _ = sat-new
-      dv      = proj₁ hold-rc
-      mv      = proj₁ (proj₂ hold-rc)
-      ld-post = proj₁ (proj₂ (proj₂ (proj₂ hold-rc)))
-      lm-post = proj₁ (proj₂ (proj₂ (proj₂ (proj₂ hold-rc))))
+      (dv , mv , _ , ld-post , lm-post , _) , _ = sat-new
       ld-pre  = lookup-shrink mem (w ∷ []) d ld-post d≤len
       lm-pre  = lookup-shrink mem (w ∷ []) m lm-post m≤len
       -- Extract fits-in dv kd and fits-in mv km via O3-Inv.
@@ -3854,15 +3649,7 @@ satisfies→R-instr-step {hc} pre s (reconstitute-field d m bits) st _ _ mi pii 
                    ≡ true
       in-field = bits-in-field-from-strict-bound {dv = dv} {mv = mv} {n = bits}
                    fits-mv fits-dv
-      sat-shifted = subst (λ k → satisfies-clauses
-                                    (clause-reconstitute k d m bits ∷ [])
-                                    (mk-witness (mem ++ (w ∷ [])) (Preprocessed.pis s ++ [])
-                                                (comm-rand-of pre)))
-                          mi sat-new
-      sat-pis = subst (λ p → satisfies-clauses
-                                (single-instr-clauses hc (length mem) (reconstitute-field d m bits))
-                                (mk-witness (mem ++ (w ∷ [])) p (comm-rand-of pre)))
-                      (++-identityʳ (Preprocessed.pis s)) sat-shifted
+      sat-pis = reshape-core {hc} {comm-rand-of pre} s (reconstitute-field d m bits) (w ∷ []) mi sat-new
       w≡target , r-ev = reconstitute-field-bwd
                           {pre = pre} {s = s} {d = d} {m = m} {bits = bits}
                           {dv = dv} {mv = mv} {v = w} {hc = hc}
@@ -5714,110 +5501,20 @@ satisfies-clauses→R-instrs {hc} pre s₀ (i ∷ is') st₀ ._ ._
 --     D2 needs.
 ------------------------------------------------------------------------
 
--- Per-step shape obligation.  Mirrors `op-side-data` *exactly* (same
--- payload, in the same `Semantics` vocabulary) so that the conversion
--- to `op-side-data` in the internal bridge is the identity.
+-- Per-step shape obligation and post-state.  These were once verbatim
+-- copies of `op-side-data` / `next-state-from-osd` (same payloads, same
+-- `Semantics` vocabulary) so that the internal bridge to `op-side-data`
+-- is the identity.  They are now definitional aliases: every downstream
+-- reference (`Tr-shaped`, `R-instr→tr-step`, `tr-step-mem`/`-pis`, the
+-- fold) reduces through the alias to the original, so the bridge stays
+-- an identity and no proof changes.
 tr-step : Instruction → ProofPreimage → Preprocessed
         → (mem-suf pis-suf : List Fr) → Set
--- Δmem=0, Δpis=0 (no payload).
-tr-step (assert _)               _ _ ms ps = (ms ≡ []) × (ps ≡ [])
-tr-step (constrain-bits _ _)     _ _ ms ps = (ms ≡ []) × (ps ≡ [])
-tr-step (constrain-eq _ _)       _ _ ms ps = (ms ≡ []) × (ps ≡ [])
-tr-step (constrain-to-boolean _) _ _ ms ps = (ms ≡ []) × (ps ≡ [])
--- Δmem=1, Δpis=0 (push-mem cases) — value `w` is FREE.
-tr-step (add _ _)                _ _ ms ps = Σ-syntax Fr (λ w → ms ≡ w ∷ []) × (ps ≡ [])
-tr-step (mul _ _)                _ _ ms ps = Σ-syntax Fr (λ w → ms ≡ w ∷ []) × (ps ≡ [])
-tr-step (neg _)                  _ _ ms ps = Σ-syntax Fr (λ w → ms ≡ w ∷ []) × (ps ≡ [])
-tr-step (copy _)                 _ _ ms ps = Σ-syntax Fr (λ w → ms ≡ w ∷ []) × (ps ≡ [])
-tr-step (load-imm _)             _ _ ms ps = Σ-syntax Fr (λ w → ms ≡ w ∷ []) × (ps ≡ [])
-tr-step (test-eq _ _)            _ _ ms ps = Σ-syntax Fr (λ w → ms ≡ w ∷ []) × (ps ≡ [])
-tr-step (transient-hash _)       _ _ ms ps = Σ-syntax Fr (λ w → ms ≡ w ∷ []) × (ps ≡ [])
-tr-step (cond-select _ _ _)      _ _ ms ps = Σ-syntax Fr (λ w → ms ≡ w ∷ []) × (ps ≡ [])
-tr-step (not _)                  _ _ ms ps = Σ-syntax Fr (λ w → ms ≡ w ∷ []) × (ps ≡ [])
-tr-step (less-than _ _ _)        _ _ ms ps = Σ-syntax Fr (λ w → ms ≡ w ∷ []) × (ps ≡ [])
-tr-step (reconstitute-field _ _ _) _ _ ms ps = Σ-syntax Fr (λ w → ms ≡ w ∷ []) × (ps ≡ [])
--- Δmem=2, Δpis=0 (push-mem2 cases) — values `x`,`y` FREE.
-tr-step (ec-add _ _ _ _) _ _ ms ps = Σ-syntax Fr (λ x → Σ-syntax Fr (λ y → ms ≡ x ∷ y ∷ [])) × (ps ≡ [])
-tr-step (ec-mul _ _ _) _ _ ms ps = Σ-syntax Fr (λ x → Σ-syntax Fr (λ y → ms ≡ x ∷ y ∷ [])) × (ps ≡ [])
-tr-step (ec-mul-generator _) _ _ ms ps = Σ-syntax Fr (λ x → Σ-syntax Fr (λ y → ms ≡ x ∷ y ∷ [])) × (ps ≡ [])
-tr-step (hash-to-curve _) _ _ ms ps = Σ-syntax Fr (λ x → Σ-syntax Fr (λ y → ms ≡ x ∷ y ∷ [])) × (ps ≡ [])
-tr-step (persistent-hash _ _) _ _ ms ps = Σ-syntax Fr (λ x → Σ-syntax Fr (λ y → ms ≡ x ∷ y ∷ [])) × (ps ≡ [])
-tr-step (div-mod-power-of-two _ _) _ _ ms ps = Σ-syntax Fr (λ x → Σ-syntax Fr (λ y → ms ≡ x ∷ y ∷ [])) × (ps ≡ [])
--- Δmem=0, Δpis=1 (declare-pub-input) — value `wv` FREE.
-tr-step (declare-pub-input _) _ _ ms ps = (ms ≡ []) × Σ-syntax Fr (λ wv → ps ≡ wv ∷ [])
--- ── Four side-data instructions (transcript-bearing) ──
-tr-step (output v) _ s ms ps =
-  Σ-syntax Fr (λ val → mem-lookup (Preprocessed.memory s) v ≡ just val)
-  × (ms ≡ []) × (ps ≡ [])
-tr-step (pi-skip g count) pre s ms ps =
-  (ms ≡ []) × (ps ≡ [])
-  × Σ-syntax Bool (λ active →
-        eval-guard (Preprocessed.memory s) g ≡ just active
-      × (if active
-         then ((drop (length (Preprocessed.pis s) ∸ count) (Preprocessed.pis s)
-                  ≡ᶠ-list?
-                take count (drop (Preprocessed.pub-in-idx s ∸ count)
-                                  (ProofPreimage.pub-transcript-inputs pre)))
-                ≡ true)
-         else ⊤))
-tr-step (public-input g) pre s ms ps =
-  Σ-syntax Fr (λ w → (ms ≡ w ∷ []) × (ps ≡ [])
-    × Σ-syntax Bool (λ active →
-          eval-guard (Preprocessed.memory s) g ≡ just active
-        × (if active
-           then Σ-syntax Preprocessed (λ s₁ → consume-pub-out s ≡ just (w , s₁))
-           else (w ≡ 0ᶠ))))
-tr-step (private-input g) pre s ms ps =
-  Σ-syntax Fr (λ w → (ms ≡ w ∷ []) × (ps ≡ [])
-    × Σ-syntax Bool (λ active →
-          eval-guard (Preprocessed.memory s) g ≡ just active
-        × (if active
-           then Σ-syntax Preprocessed (λ s₁ → consume-priv s ≡ just (w , s₁))
-           else (w ≡ 0ᶠ))))
+tr-step = op-side-data
 
--- Post-state computed from the step shape.  Mirrors `next-state-from-osd`
--- exactly, so that the bridge's index expressions coincide definitionally.
 tr-next : (i : Instruction) (pre : ProofPreimage) (s : Preprocessed)
           (mem-suf pis-suf : List Fr) → tr-step i pre s mem-suf pis-suf → Preprocessed
-tr-next (assert _)               _ s _ _ _ = s
-tr-next (constrain-bits _ _)     _ s _ _ _ = s
-tr-next (constrain-eq _ _)       _ s _ _ _ = s
-tr-next (constrain-to-boolean _) _ s _ _ _ = s
-tr-next (add _ _)                _ s _ _ ((w , _) , _) = push-mem s w
-tr-next (mul _ _)                _ s _ _ ((w , _) , _) = push-mem s w
-tr-next (neg _)                  _ s _ _ ((w , _) , _) = push-mem s w
-tr-next (copy _)                 _ s _ _ ((w , _) , _) = push-mem s w
-tr-next (load-imm _)             _ s _ _ ((w , _) , _) = push-mem s w
-tr-next (test-eq _ _)            _ s _ _ ((w , _) , _) = push-mem s w
-tr-next (transient-hash _)       _ s _ _ ((w , _) , _) = push-mem s w
-tr-next (cond-select _ _ _)      _ s _ _ ((w , _) , _) = push-mem s w
-tr-next (not _)                  _ s _ _ ((w , _) , _) = push-mem s w
-tr-next (less-than _ _ _)        _ s _ _ ((w , _) , _) = push-mem s w
-tr-next (reconstitute-field _ _ _) _ s _ _ ((w , _) , _) = push-mem s w
-tr-next (ec-add _ _ _ _) _ s _ _ ((x , y , _) , _) = push-mem2 s x y
-tr-next (ec-mul _ _ _) _ s _ _ ((x , y , _) , _) = push-mem2 s x y
-tr-next (ec-mul-generator _) _ s _ _ ((x , y , _) , _) = push-mem2 s x y
-tr-next (hash-to-curve _) _ s _ _ ((x , y , _) , _) = push-mem2 s x y
-tr-next (persistent-hash _ _) _ s _ _ ((x , y , _) , _) = push-mem2 s x y
-tr-next (div-mod-power-of-two _ _) _ s _ _ ((x , y , _) , _) = push-mem2 s x y
-tr-next (declare-pub-input _) _ s _ _ (_ , wv , _) =
-  record s { pis        = Preprocessed.pis s ++ (wv ∷ [])
-           ; pub-in-idx = suc (Preprocessed.pub-in-idx s) }
-tr-next (output v) _ s _ _ ((val , _) , _ , _) =
-  record s { outputs = Preprocessed.outputs s ++ (val ∷ []) }
-tr-next (pi-skip _ _) _ s _ _ (_ , _ , (true  , _ , _)) =
-  record s { pi-skips = Preprocessed.pi-skips s ++ (nothing ∷ []) }
-tr-next (pi-skip _ count) _ s _ _ (_ , _ , (false , _ , _)) =
-  record s { pi-skips   = Preprocessed.pi-skips s ++ (just count ∷ [])
-           ; pub-in-idx = Preprocessed.pub-in-idx s ∸ count }
-tr-next (public-input _) _ s _ _ (w , _ , _ , (true , _ , (s₁ , _))) =
-  record s₁ { memory = Preprocessed.memory s₁ ++ (w ∷ []) }
-tr-next (public-input _) _ s _ _ (w , _ , _ , (false , _ , _)) =
-  record s { memory = Preprocessed.memory s ++ (w ∷ []) }
-tr-next (private-input _) _ s _ _ (w , _ , _ , (true , _ , (s₁ , _))) =
-  record s₁ { memory = Preprocessed.memory s₁ ++ (w ∷ []) }
-tr-next (private-input _) _ s _ _ (w , _ , _ , (false , _ , _)) =
-  record s { memory = Preprocessed.memory s ++ (w ∷ []) }
+tr-next = next-state-from-osd
 
 -- The list closure.  Structurally identical to `op-side-data-list` but
 -- built from the clean `tr-step` / `tr-next` (which coincide

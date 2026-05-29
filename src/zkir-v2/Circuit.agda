@@ -354,14 +354,12 @@ circuit-instr _ (less-than a b bits) st =
   push-clause (bump-wires st 1) (clause-less-than out a b bits)
 
 circuit-instr _ (public-input nothing) st =
-  let out = SynthState.nr-wires st in
   bump-wires st 1                      -- a free witness wire, no clause
 circuit-instr _ (public-input (just g)) st =
   let out = SynthState.nr-wires st in
   push-clause (bump-wires st 1) (clause-guard-disj out g)
 
 circuit-instr _ (private-input nothing) st =
-  let out = SynthState.nr-wires st in
   bump-wires st 1
 circuit-instr _ (private-input (just g)) st =
   let out = SynthState.nr-wires st in

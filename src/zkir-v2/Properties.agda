@@ -76,6 +76,14 @@ private
     → length (Preprocessed.memory s) ≤ length (Preprocessed.memory (push-mem2 s v₁ v₂))
   push-mem2-≤ s _ _ = length-++-≤ˡ (Preprocessed.memory s)
 
+  -- Transport a memory-length bound along the post-state equality the
+  -- mem-≤ clauses recover from `preprocess-instr`.  Replaces the
+  -- per-clause `subst (λ x → length (memory s) ≤ length (memory x)) …`.
+  mem-≤-by : ∀ (s : Preprocessed) {t s'} → t ≡ s'
+    → length (Preprocessed.memory s) ≤ length (Preprocessed.memory t)
+    → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
+  mem-≤-by _ refl le = le
+
   consume-pub-out-mem : ∀ s v s'
     → consume-pub-out s ≡ just (v , s')
     → Preprocessed.memory s' ≡ Preprocessed.memory s
@@ -124,28 +132,22 @@ preprocess-transcripts-consumed src pre s eq
 -- Per-instruction lemmas: assert, constrain-*, declare-pub-input,
 -- pi-skip, output leave memory unchanged; all others grow it.
 
-preprocess-instr-mem-≤-assert : ∀ pre s cond s'
-  → preprocess-instr pre s (assert cond) ≡ just s'
+preprocess-instr-mem-≤ : ∀ pre s i s'
+  → preprocess-instr pre s i ≡ just s'
   → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-assert _ s cond s' eq
+preprocess-instr-mem-≤ _ s (assert cond) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) cond >>= to-bool) eq
 ... | b , _ , eq₁
   with if-just b eq₁
 ... | _ , s-eq = mem-refl s-eq
 
-preprocess-instr-mem-≤-constrain-bits : ∀ pre s var bits s'
-  → preprocess-instr pre s (constrain-bits var bits) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-constrain-bits _ s var bits s' eq
+preprocess-instr-mem-≤ _ s (constrain-bits var bits) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) var) eq
 ... | v , _ , eq₁
   with if-just (fits-in v bits) eq₁
 ... | _ , s-eq = mem-refl s-eq
 
-preprocess-instr-mem-≤-constrain-eq : ∀ pre s a b s'
-  → preprocess-instr pre s (constrain-eq a b) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-constrain-eq _ s a b s' eq
+preprocess-instr-mem-≤ _ s (constrain-eq a b) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a) eq
 ... | av , _ , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) b) eq₁
@@ -153,65 +155,40 @@ preprocess-instr-mem-≤-constrain-eq _ s a b s' eq
   with if-just (av ≡ᶠ? bv) eq₂
 ... | _ , s-eq = mem-refl s-eq
 
-preprocess-instr-mem-≤-constrain-to-boolean : ∀ pre s var s'
-  → preprocess-instr pre s (constrain-to-boolean var) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-constrain-to-boolean _ s var s' eq
+preprocess-instr-mem-≤ _ s (constrain-to-boolean var) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) var >>= to-bool) eq
 ... | _ , _ , eq₁ = mem-refl (just-injective eq₁)
 
-preprocess-instr-mem-≤-declare-pub-input : ∀ pre s var s'
-  → preprocess-instr pre s (declare-pub-input var) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-declare-pub-input _ s var s' eq
+preprocess-instr-mem-≤ _ s (declare-pub-input var) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) var) eq
 ... | _ , _ , eq₁ = mem-refl (just-injective eq₁)
 
-preprocess-instr-mem-≤-pi-skip : ∀ pre s guard count s'
-  → preprocess-instr pre s (pi-skip guard count) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-pi-skip pre s guard count s' eq
+preprocess-instr-mem-≤ pre s (pi-skip guard count) s' eq
   with >>=-just (eval-guard (Preprocessed.memory s) guard) eq
 ... | false , _ , eq₁ = mem-refl (just-injective eq₁)
 ... | true  , _ , eq₁
   with if-just _ eq₁
 ... | _ , ps-eq = mem-refl ps-eq
 
-preprocess-instr-mem-≤-output : ∀ pre s var s'
-  → preprocess-instr pre s (output var) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-output _ s var s' eq
+preprocess-instr-mem-≤ _ s (output var) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) var) eq
 ... | _ , _ , eq₁ = mem-refl (just-injective eq₁)
 
-preprocess-instr-mem-≤-cond-select : ∀ pre s bit a b s'
-  → preprocess-instr pre s (cond-select bit a b) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-cond-select _ s bit a b s' eq
+preprocess-instr-mem-≤ _ s (cond-select bit a b) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) bit >>= to-bool) eq
 ... | bv , _ , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) a) eq₁
 ... | av , _ , eq₂
   with >>=-just (mem-lookup (Preprocessed.memory s) b) eq₂
 ... | _ , _ , eq₃
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₃)
-      (push-mem-≤ s _)
+  = mem-≤-by s (just-injective eq₃) (push-mem-≤ s _)
 
-preprocess-instr-mem-≤-copy : ∀ pre s var s'
-  → preprocess-instr pre s (copy var) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-copy _ s var s' eq
+preprocess-instr-mem-≤ _ s (copy var) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) var) eq
 ... | _ , _ , eq₁
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₁)
-      (push-mem-≤ s _)
+  = mem-≤-by s (just-injective eq₁) (push-mem-≤ s _)
 
-preprocess-instr-mem-≤-ec-add : ∀ pre s a_x a_y b_x b_y s'
-  → preprocess-instr pre s (ec-add a_x a_y b_x b_y) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-ec-add _ s a_x a_y b_x b_y s' eq
+preprocess-instr-mem-≤ _ s (ec-add a_x a_y b_x b_y) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a_x) eq
 ... | ax , _ , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) a_y) eq₁
@@ -222,14 +199,9 @@ preprocess-instr-mem-≤-ec-add _ s a_x a_y b_x b_y s' eq
 ... | by , _ , eq₄
   with >>=-just (ec-add-pts ax ay bx by) eq₄
 ... | (cx , cy) , _ , eq₅
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₅)
-      (push-mem2-≤ s cx cy)
+  = mem-≤-by s (just-injective eq₅) (push-mem2-≤ s cx cy)
 
-preprocess-instr-mem-≤-ec-mul : ∀ pre s a_x a_y scalar s'
-  → preprocess-instr pre s (ec-mul a_x a_y scalar) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-ec-mul _ s a_x a_y scalar s' eq
+preprocess-instr-mem-≤ _ s (ec-mul a_x a_y scalar) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a_x) eq
 ... | ax , _ , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) a_y) eq₁
@@ -238,228 +210,121 @@ preprocess-instr-mem-≤-ec-mul _ s a_x a_y scalar s' eq
 ... | sc , _ , eq₃
   with >>=-just (ec-mul-pt ax ay sc) eq₃
 ... | (cx , cy) , _ , eq₄
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₄)
-      (push-mem2-≤ s cx cy)
+  = mem-≤-by s (just-injective eq₄) (push-mem2-≤ s cx cy)
 
-preprocess-instr-mem-≤-ec-mul-generator : ∀ pre s scalar s'
-  → preprocess-instr pre s (ec-mul-generator scalar) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-ec-mul-generator _ s scalar s' eq
+preprocess-instr-mem-≤ _ s (ec-mul-generator scalar) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) scalar) eq
 ... | sc , _ , eq₁
   with ec-mul-gen sc
 ... | (cx , cy)
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₁)
-      (push-mem2-≤ s cx cy)
+  = mem-≤-by s (just-injective eq₁) (push-mem2-≤ s cx cy)
 
-preprocess-instr-mem-≤-hash-to-curve : ∀ pre s inputs s'
-  → preprocess-instr pre s (hash-to-curve inputs) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-hash-to-curve _ s inputs s' eq
+preprocess-instr-mem-≤ _ s (hash-to-curve inputs) s' eq
   with >>=-just (mem-lookups (Preprocessed.memory s) inputs) eq
 ... | vs , _ , eq₁
   with hash-to-curve-fn vs
 ... | (cx , cy)
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₁)
-      (push-mem2-≤ s cx cy)
+  = mem-≤-by s (just-injective eq₁) (push-mem2-≤ s cx cy)
 
-preprocess-instr-mem-≤-load-imm : ∀ pre s imm s'
-  → preprocess-instr pre s (load-imm imm) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-load-imm _ s imm s' eq
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq)
-      (push-mem-≤ s imm)
+preprocess-instr-mem-≤ _ s (load-imm imm) s' eq
+  = mem-≤-by s (just-injective eq) (push-mem-≤ s imm)
 
-preprocess-instr-mem-≤-div-mod-power-of-two : ∀ pre s var bits s'
-  → preprocess-instr pre s (div-mod-power-of-two var bits) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-div-mod-power-of-two _ s var bits s' eq
+preprocess-instr-mem-≤ _ s (div-mod-power-of-two var bits) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) var) eq
 ... | _ , _ , eq₁
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₁)
-      (≤-trans (push-mem-≤ s _) (push-mem-≤ (push-mem s _) _))
+  = mem-≤-by s (just-injective eq₁) (≤-trans (push-mem-≤ s _) (push-mem-≤ (push-mem s _) _))
 
-preprocess-instr-mem-≤-reconstitute-field : ∀ pre s d m bits s'
-  → preprocess-instr pre s (reconstitute-field d m bits) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-reconstitute-field _ s d m bits s' eq
+preprocess-instr-mem-≤ _ s (reconstitute-field d m bits) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) d) eq
 ... | _ , _ , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) m) eq₁
 ... | _ , _ , eq₂
   with if-just _ eq₂
 ... | _ , s-eq
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      s-eq
-      (push-mem-≤ s _)
+  = mem-≤-by s s-eq (push-mem-≤ s _)
 
-preprocess-instr-mem-≤-transient-hash : ∀ pre s inputs s'
-  → preprocess-instr pre s (transient-hash inputs) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-transient-hash _ s inputs s' eq
+preprocess-instr-mem-≤ _ s (transient-hash inputs) s' eq
   with >>=-just (mem-lookups (Preprocessed.memory s) inputs) eq
 ... | _ , _ , eq₁
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₁)
-      (push-mem-≤ s _)
+  = mem-≤-by s (just-injective eq₁) (push-mem-≤ s _)
 
-preprocess-instr-mem-≤-persistent-hash : ∀ pre s alignment inputs s'
-  → preprocess-instr pre s (persistent-hash alignment inputs) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-persistent-hash _ s alignment inputs s' eq
+preprocess-instr-mem-≤ _ s (persistent-hash alignment inputs) s' eq
   with >>=-just (mem-lookups (Preprocessed.memory s) inputs) eq
 ... | vs , _ , eq₁
   with persistent-hash-fn alignment vs
 ... | (h₁ , h₂)
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₁)
-      (push-mem2-≤ s h₁ h₂)
+  = mem-≤-by s (just-injective eq₁) (push-mem2-≤ s h₁ h₂)
 
-preprocess-instr-mem-≤-test-eq : ∀ pre s a b s'
-  → preprocess-instr pre s (test-eq a b) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-test-eq _ s a b s' eq
+preprocess-instr-mem-≤ _ s (test-eq a b) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a) eq
 ... | _ , _ , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) b) eq₁
 ... | _ , _ , eq₂
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₂)
-      (push-mem-≤ s _)
+  = mem-≤-by s (just-injective eq₂) (push-mem-≤ s _)
 
-preprocess-instr-mem-≤-add : ∀ pre s a b s'
-  → preprocess-instr pre s (add a b) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-add _ s a b s' eq
+preprocess-instr-mem-≤ _ s (add a b) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a) eq
 ... | _ , _ , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) b) eq₁
 ... | _ , _ , eq₂
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₂)
-      (push-mem-≤ s _)
+  = mem-≤-by s (just-injective eq₂) (push-mem-≤ s _)
 
-preprocess-instr-mem-≤-mul : ∀ pre s a b s'
-  → preprocess-instr pre s (mul a b) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-mul _ s a b s' eq
+preprocess-instr-mem-≤ _ s (mul a b) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a) eq
 ... | _ , _ , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) b) eq₁
 ... | _ , _ , eq₂
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₂)
-      (push-mem-≤ s _)
+  = mem-≤-by s (just-injective eq₂) (push-mem-≤ s _)
 
-preprocess-instr-mem-≤-neg : ∀ pre s a s'
-  → preprocess-instr pre s (neg a) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-neg _ s a s' eq
+preprocess-instr-mem-≤ _ s (neg a) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a) eq
 ... | _ , _ , eq₁
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₁)
-      (push-mem-≤ s _)
+  = mem-≤-by s (just-injective eq₁) (push-mem-≤ s _)
 
-preprocess-instr-mem-≤-not : ∀ pre s a s'
-  → preprocess-instr pre s (not a) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-not _ s a s' eq
+preprocess-instr-mem-≤ _ s (not a) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a >>= to-bool) eq
 ... | _ , _ , eq₁
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₁)
-      (push-mem-≤ s _)
+  = mem-≤-by s (just-injective eq₁) (push-mem-≤ s _)
 
-preprocess-instr-mem-≤-less-than : ∀ pre s a b bits s'
-  → preprocess-instr pre s (less-than a b bits) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-less-than _ s a b bits s' eq
+preprocess-instr-mem-≤ _ s (less-than a b bits) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a) eq
 ... | _ , _ , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) b) eq₁
 ... | _ , _ , eq₂
   with if-just _ eq₂
 ... | _ , s-eq
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      s-eq
-      (push-mem-≤ s _)
+  = mem-≤-by s s-eq (push-mem-≤ s _)
 
-preprocess-instr-mem-≤-public-input : ∀ pre s guard s'
-  → preprocess-instr pre s (public-input guard) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-public-input pre s guard s' eq
+preprocess-instr-mem-≤ pre s (public-input guard) s' eq
   with >>=-just (eval-guard (Preprocessed.memory s) guard) eq
 ... | active , _ , eq₁
   with active
 ... | false
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₁)
+  = mem-≤-by s (just-injective eq₁)
       (push-mem-≤ s 0ᶠ)
 ... | true
   with >>=-just (consume-pub-out s) eq₁
 ... | (v , s₁) , eq₂ , eq₃
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₃)
+  = mem-≤-by s (just-injective eq₃)
       (≤-trans
         (≤-reflexive (sym (cong length (consume-pub-out-mem s v s₁ eq₂))))
         (push-mem-≤ s₁ v))
 
-preprocess-instr-mem-≤-private-input : ∀ pre s guard s'
-  → preprocess-instr pre s (private-input guard) ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤-private-input pre s guard s' eq
+preprocess-instr-mem-≤ pre s (private-input guard) s' eq
   with >>=-just (eval-guard (Preprocessed.memory s) guard) eq
 ... | active , _ , eq₁
   with active
 ... | false
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₁)
+  = mem-≤-by s (just-injective eq₁)
       (push-mem-≤ s 0ᶠ)
 ... | true
   with >>=-just (consume-priv s) eq₁
 ... | (v , s₁) , eq₂ , eq₃
-  = subst (λ x → length (Preprocessed.memory s) ≤ length (Preprocessed.memory x))
-      (just-injective eq₃)
+  = mem-≤-by s (just-injective eq₃)
       (≤-trans
         (≤-reflexive (sym (cong length (consume-priv-mem s v s₁ eq₂))))
         (push-mem-≤ s₁ v))
 
--- Combine the 26 per-instruction lemmas into the general statement.
-preprocess-instr-mem-≤ : ∀ pre s i s'
-  → preprocess-instr pre s i ≡ just s'
-  → length (Preprocessed.memory s) ≤ length (Preprocessed.memory s')
-preprocess-instr-mem-≤ pre s (assert cond)                   = preprocess-instr-mem-≤-assert                pre s cond
-preprocess-instr-mem-≤ pre s (cond-select bit a b)           = preprocess-instr-mem-≤-cond-select            pre s bit a b
-preprocess-instr-mem-≤ pre s (constrain-bits var bits)       = preprocess-instr-mem-≤-constrain-bits         pre s var bits
-preprocess-instr-mem-≤ pre s (constrain-eq a b)              = preprocess-instr-mem-≤-constrain-eq           pre s a b
-preprocess-instr-mem-≤ pre s (constrain-to-boolean var)      = preprocess-instr-mem-≤-constrain-to-boolean   pre s var
-preprocess-instr-mem-≤ pre s (copy var)                      = preprocess-instr-mem-≤-copy                   pre s var
-preprocess-instr-mem-≤ pre s (declare-pub-input var)         = preprocess-instr-mem-≤-declare-pub-input      pre s var
-preprocess-instr-mem-≤ pre s (pi-skip guard count)           = preprocess-instr-mem-≤-pi-skip                pre s guard count
-preprocess-instr-mem-≤ pre s (ec-add a_x a_y b_x b_y)       = preprocess-instr-mem-≤-ec-add                 pre s a_x a_y b_x b_y
-preprocess-instr-mem-≤ pre s (ec-mul a_x a_y scalar)         = preprocess-instr-mem-≤-ec-mul                 pre s a_x a_y scalar
-preprocess-instr-mem-≤ pre s (ec-mul-generator scalar)       = preprocess-instr-mem-≤-ec-mul-generator       pre s scalar
-preprocess-instr-mem-≤ pre s (hash-to-curve inputs)          = preprocess-instr-mem-≤-hash-to-curve          pre s inputs
-preprocess-instr-mem-≤ pre s (load-imm imm)                  = preprocess-instr-mem-≤-load-imm               pre s imm
-preprocess-instr-mem-≤ pre s (div-mod-power-of-two var bits) = preprocess-instr-mem-≤-div-mod-power-of-two   pre s var bits
-preprocess-instr-mem-≤ pre s (reconstitute-field d m bits)   = preprocess-instr-mem-≤-reconstitute-field     pre s d m bits
-preprocess-instr-mem-≤ pre s (output var)                    = preprocess-instr-mem-≤-output                 pre s var
-preprocess-instr-mem-≤ pre s (transient-hash inputs)         = preprocess-instr-mem-≤-transient-hash         pre s inputs
-preprocess-instr-mem-≤ pre s (persistent-hash alignment is)  = preprocess-instr-mem-≤-persistent-hash        pre s alignment is
-preprocess-instr-mem-≤ pre s (test-eq a b)                   = preprocess-instr-mem-≤-test-eq                pre s a b
-preprocess-instr-mem-≤ pre s (add a b)                       = preprocess-instr-mem-≤-add                    pre s a b
-preprocess-instr-mem-≤ pre s (mul a b)                       = preprocess-instr-mem-≤-mul                    pre s a b
-preprocess-instr-mem-≤ pre s (neg a)                         = preprocess-instr-mem-≤-neg                    pre s a
-preprocess-instr-mem-≤ pre s (not a)                         = preprocess-instr-mem-≤-not                    pre s a
-preprocess-instr-mem-≤ pre s (less-than a b bits)            = preprocess-instr-mem-≤-less-than              pre s a b bits
-preprocess-instr-mem-≤ pre s (public-input guard)            = preprocess-instr-mem-≤-public-input           pre s guard
-preprocess-instr-mem-≤ pre s (private-input guard)           = preprocess-instr-mem-≤-private-input          pre s guard
 
 -- Executing a sequence of instructions does not shrink the memory.
 preprocess-instrs-mono : ∀ pre s is s'
@@ -497,9 +362,9 @@ preprocess-memory-mono src pre s eq
 
 -- Per-instruction: computational → relational
 
-preprocess-instr→R-instr-assert : ∀ pre s cond s'
-  → preprocess-instr pre s (assert cond) ≡ just s' → R-instr pre s (assert cond) s'
-preprocess-instr→R-instr-assert _ s cond s' eq
+preprocess-instr→R-instr : ∀ pre s i s'
+  → preprocess-instr pre s i ≡ just s' → R-instr pre s i s'
+preprocess-instr→R-instr _ s (assert cond) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) cond >>= to-bool) eq
 ... | b , lb , eq₁
   with if-just b eq₁
@@ -507,9 +372,7 @@ preprocess-instr→R-instr-assert _ s cond s' eq
   = subst (R-instr _ s (assert cond)) s-eq
       (r-assert (subst (λ x → _ ≡ just x) b-true lb))
 
-preprocess-instr→R-instr-cond-select : ∀ pre s bit a b s'
-  → preprocess-instr pre s (cond-select bit a b) ≡ just s' → R-instr pre s (cond-select bit a b) s'
-preprocess-instr→R-instr-cond-select _ s bit a b s' eq
+preprocess-instr→R-instr _ s (cond-select bit a b) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) bit >>= to-bool) eq
 ... | sel , lsel , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) a) eq₁
@@ -518,18 +381,14 @@ preprocess-instr→R-instr-cond-select _ s bit a b s' eq
 ... | bv , lb , eq₃
   = from-just-R (r-cond-select lsel la lb) eq₃
 
-preprocess-instr→R-instr-constrain-bits : ∀ pre s var bits s'
-  → preprocess-instr pre s (constrain-bits var bits) ≡ just s' → R-instr pre s (constrain-bits var bits) s'
-preprocess-instr→R-instr-constrain-bits _ s var bits s' eq
+preprocess-instr→R-instr _ s (constrain-bits var bits) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) var) eq
 ... | v , lv , eq₁
   with if-just (fits-in v bits) eq₁
 ... | fits , s-eq
   = subst (R-instr _ s (constrain-bits var bits)) s-eq (r-constrain-bits lv fits)
 
-preprocess-instr→R-instr-constrain-eq : ∀ pre s a b s'
-  → preprocess-instr pre s (constrain-eq a b) ≡ just s' → R-instr pre s (constrain-eq a b) s'
-preprocess-instr→R-instr-constrain-eq _ s a b s' eq
+preprocess-instr→R-instr _ s (constrain-eq a b) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a) eq
 ... | av , la , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) b) eq₁
@@ -538,28 +397,20 @@ preprocess-instr→R-instr-constrain-eq _ s a b s' eq
 ... | eq? , s-eq
   = subst (R-instr _ s (constrain-eq a b)) s-eq (r-constrain-eq la lb eq?)
 
-preprocess-instr→R-instr-constrain-to-boolean : ∀ pre s var s'
-  → preprocess-instr pre s (constrain-to-boolean var) ≡ just s' → R-instr pre s (constrain-to-boolean var) s'
-preprocess-instr→R-instr-constrain-to-boolean _ s var s' eq
+preprocess-instr→R-instr _ s (constrain-to-boolean var) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) var >>= to-bool) eq
 ... | b , lb , eq₁
   = subst (R-instr _ s (constrain-to-boolean var)) (just-injective eq₁) (r-constrain-to-boolean lb)
 
-preprocess-instr→R-instr-copy : ∀ pre s var s'
-  → preprocess-instr pre s (copy var) ≡ just s' → R-instr pre s (copy var) s'
-preprocess-instr→R-instr-copy _ s var s' eq
+preprocess-instr→R-instr _ s (copy var) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) var) eq
 ... | v , lv , eq₁ = from-just-R (r-copy lv) eq₁
 
-preprocess-instr→R-instr-declare-pub-input : ∀ pre s var s'
-  → preprocess-instr pre s (declare-pub-input var) ≡ just s' → R-instr pre s (declare-pub-input var) s'
-preprocess-instr→R-instr-declare-pub-input _ s var s' eq
+preprocess-instr→R-instr _ s (declare-pub-input var) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) var) eq
 ... | v , lv , eq₁ = from-just-R (r-declare-pub-input lv) eq₁
 
-preprocess-instr→R-instr-pi-skip : ∀ pre s guard count s'
-  → preprocess-instr pre s (pi-skip guard count) ≡ just s' → R-instr pre s (pi-skip guard count) s'
-preprocess-instr→R-instr-pi-skip pre s guard count s' eq
+preprocess-instr→R-instr pre s (pi-skip guard count) s' eq
   with >>=-just (eval-guard (Preprocessed.memory s) guard) eq
 ... | false , gf , eq₁ = from-just-R (r-pi-skip-inactive gf) eq₁
 ... | true  , gt , eq₁
@@ -567,9 +418,7 @@ preprocess-instr→R-instr-pi-skip pre s guard count s' eq
 ... | chk , s-eq
   = subst (R-instr pre s (pi-skip guard count)) s-eq (r-pi-skip-active gt chk)
 
-preprocess-instr→R-instr-ec-add : ∀ pre s a_x a_y b_x b_y s'
-  → preprocess-instr pre s (ec-add a_x a_y b_x b_y) ≡ just s' → R-instr pre s (ec-add a_x a_y b_x b_y) s'
-preprocess-instr→R-instr-ec-add _ s a_x a_y b_x b_y s' eq
+preprocess-instr→R-instr _ s (ec-add a_x a_y b_x b_y) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a_x) eq
 ... | ax , lax , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) a_y) eq₁
@@ -581,9 +430,7 @@ preprocess-instr→R-instr-ec-add _ s a_x a_y b_x b_y s' eq
   with >>=-just (ec-add-pts ax ay bx by) eq₄
 ... | (cx , cy) , add-eq , eq₅ = from-just-R (r-ec-add lax lay lbx lby add-eq) eq₅
 
-preprocess-instr→R-instr-ec-mul : ∀ pre s a_x a_y scalar s'
-  → preprocess-instr pre s (ec-mul a_x a_y scalar) ≡ just s' → R-instr pre s (ec-mul a_x a_y scalar) s'
-preprocess-instr→R-instr-ec-mul _ s a_x a_y scalar s' eq
+preprocess-instr→R-instr _ s (ec-mul a_x a_y scalar) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a_x) eq
 ... | ax , lax , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) a_y) eq₁
@@ -593,35 +440,23 @@ preprocess-instr→R-instr-ec-mul _ s a_x a_y scalar s' eq
   with >>=-just (ec-mul-pt ax ay sc) eq₃
 ... | (cx , cy) , mul-eq , eq₄ = from-just-R (r-ec-mul lax lay lsc mul-eq) eq₄
 
-preprocess-instr→R-instr-ec-mul-generator : ∀ pre s scalar s'
-  → preprocess-instr pre s (ec-mul-generator scalar) ≡ just s' → R-instr pre s (ec-mul-generator scalar) s'
-preprocess-instr→R-instr-ec-mul-generator _ s scalar s' eq
+preprocess-instr→R-instr _ s (ec-mul-generator scalar) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) scalar) eq
 ... | sc , lsc , eq₁
   = subst (R-instr _ s (ec-mul-generator scalar)) (just-injective eq₁) (r-ec-mul-generator lsc refl)
 
-preprocess-instr→R-instr-hash-to-curve : ∀ pre s inputs s'
-  → preprocess-instr pre s (hash-to-curve inputs) ≡ just s' → R-instr pre s (hash-to-curve inputs) s'
-preprocess-instr→R-instr-hash-to-curve _ s inputs s' eq
+preprocess-instr→R-instr _ s (hash-to-curve inputs) s' eq
   with >>=-just (mem-lookups (Preprocessed.memory s) inputs) eq
 ... | vs , lvs , eq₁
   = subst (R-instr _ s (hash-to-curve inputs)) (just-injective eq₁) (r-hash-to-curve lvs refl)
 
-preprocess-instr→R-instr-load-imm : ∀ pre s imm s'
-  → preprocess-instr pre s (load-imm imm) ≡ just s' → R-instr pre s (load-imm imm) s'
-preprocess-instr→R-instr-load-imm _ s imm s' eq = from-just-R r-load-imm eq
+preprocess-instr→R-instr _ s (load-imm imm) s' eq = from-just-R r-load-imm eq
 
-preprocess-instr→R-instr-div-mod-power-of-two : ∀ pre s var bits s'
-  → preprocess-instr pre s (div-mod-power-of-two var bits) ≡ just s'
-  → R-instr pre s (div-mod-power-of-two var bits) s'
-preprocess-instr→R-instr-div-mod-power-of-two _ s var bits s' eq
+preprocess-instr→R-instr _ s (div-mod-power-of-two var bits) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) var) eq
 ... | v , lv , eq₁ = from-just-R (r-div-mod-power-of-two lv) eq₁
 
-preprocess-instr→R-instr-reconstitute-field : ∀ pre s divisor modulus bits s'
-  → preprocess-instr pre s (reconstitute-field divisor modulus bits) ≡ just s'
-  → R-instr pre s (reconstitute-field divisor modulus bits) s'
-preprocess-instr→R-instr-reconstitute-field _ s divisor modulus bits s' eq
+preprocess-instr→R-instr _ s (reconstitute-field divisor modulus bits) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) divisor) eq
 ... | dv , ldv , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) modulus) eq₁
@@ -631,65 +466,46 @@ preprocess-instr→R-instr-reconstitute-field _ s divisor modulus bits s' eq
   = subst (R-instr _ s (reconstitute-field divisor modulus bits)) s-eq
       (r-reconstitute-field ldv lmv cond)
 
-preprocess-instr→R-instr-output : ∀ pre s var s'
-  → preprocess-instr pre s (output var) ≡ just s' → R-instr pre s (output var) s'
-preprocess-instr→R-instr-output _ s var s' eq
+preprocess-instr→R-instr _ s (output var) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) var) eq
 ... | v , lv , eq₁ = from-just-R (r-output lv) eq₁
 
-preprocess-instr→R-instr-transient-hash : ∀ pre s inputs s'
-  → preprocess-instr pre s (transient-hash inputs) ≡ just s' → R-instr pre s (transient-hash inputs) s'
-preprocess-instr→R-instr-transient-hash _ s inputs s' eq
+preprocess-instr→R-instr _ s (transient-hash inputs) s' eq
   with >>=-just (mem-lookups (Preprocessed.memory s) inputs) eq
 ... | vs , lvs , eq₁ = from-just-R (r-transient-hash lvs) eq₁
 
-preprocess-instr→R-instr-persistent-hash : ∀ pre s alignment inputs s'
-  → preprocess-instr pre s (persistent-hash alignment inputs) ≡ just s'
-  → R-instr pre s (persistent-hash alignment inputs) s'
-preprocess-instr→R-instr-persistent-hash _ s alignment inputs s' eq
+preprocess-instr→R-instr _ s (persistent-hash alignment inputs) s' eq
   with >>=-just (mem-lookups (Preprocessed.memory s) inputs) eq
 ... | vs , lvs , eq₁
   = subst (R-instr _ s (persistent-hash alignment inputs)) (just-injective eq₁) (r-persistent-hash lvs refl)
 
-preprocess-instr→R-instr-test-eq : ∀ pre s a b s'
-  → preprocess-instr pre s (test-eq a b) ≡ just s' → R-instr pre s (test-eq a b) s'
-preprocess-instr→R-instr-test-eq _ s a b s' eq
+preprocess-instr→R-instr _ s (test-eq a b) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a) eq
 ... | av , la , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) b) eq₁
 ... | bv , lb , eq₂ = from-just-R (r-test-eq la lb) eq₂
 
-preprocess-instr→R-instr-add : ∀ pre s a b s'
-  → preprocess-instr pre s (add a b) ≡ just s' → R-instr pre s (add a b) s'
-preprocess-instr→R-instr-add _ s a b s' eq
+preprocess-instr→R-instr _ s (add a b) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a) eq
 ... | av , la , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) b) eq₁
 ... | bv , lb , eq₂ = from-just-R (r-add la lb) eq₂
 
-preprocess-instr→R-instr-mul : ∀ pre s a b s'
-  → preprocess-instr pre s (mul a b) ≡ just s' → R-instr pre s (mul a b) s'
-preprocess-instr→R-instr-mul _ s a b s' eq
+preprocess-instr→R-instr _ s (mul a b) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a) eq
 ... | av , la , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) b) eq₁
 ... | bv , lb , eq₂ = from-just-R (r-mul la lb) eq₂
 
-preprocess-instr→R-instr-neg : ∀ pre s a s'
-  → preprocess-instr pre s (neg a) ≡ just s' → R-instr pre s (neg a) s'
-preprocess-instr→R-instr-neg _ s a s' eq
+preprocess-instr→R-instr _ s (neg a) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a) eq
 ... | av , la , eq₁ = from-just-R (r-neg la) eq₁
 
-preprocess-instr→R-instr-not : ∀ pre s a s'
-  → preprocess-instr pre s (not a) ≡ just s' → R-instr pre s (not a) s'
-preprocess-instr→R-instr-not _ s a s' eq
+preprocess-instr→R-instr _ s (not a) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a >>= to-bool) eq
 ... | b , lb , eq₁ = from-just-R (r-not lb) eq₁
 
-preprocess-instr→R-instr-less-than : ∀ pre s a b bits s'
-  → preprocess-instr pre s (less-than a b bits) ≡ just s' → R-instr pre s (less-than a b bits) s'
-preprocess-instr→R-instr-less-than _ s a b bits s' eq
+preprocess-instr→R-instr _ s (less-than a b bits) s' eq
   with >>=-just (mem-lookup (Preprocessed.memory s) a) eq
 ... | av , la , eq₁
   with >>=-just (mem-lookup (Preprocessed.memory s) b) eq₁
@@ -698,201 +514,86 @@ preprocess-instr→R-instr-less-than _ s a b bits s' eq
 ... | fits , s-eq
   = subst (R-instr _ s (less-than a b bits)) s-eq (r-less-than la lb fits)
 
-preprocess-instr→R-instr-public-input : ∀ pre s guard s'
-  → preprocess-instr pre s (public-input guard) ≡ just s' → R-instr pre s (public-input guard) s'
-preprocess-instr→R-instr-public-input _ s guard s' eq
+preprocess-instr→R-instr _ s (public-input guard) s' eq
   with >>=-just (eval-guard (Preprocessed.memory s) guard) eq
 ... | false , gf , eq₁ = from-just-R (r-public-input-inactive gf) eq₁
 ... | true  , gt , eq₁
   with >>=-just (consume-pub-out s) eq₁
 ... | (v , s₁) , cp , eq₂ = from-just-R (r-public-input-active gt cp) eq₂
 
-preprocess-instr→R-instr-private-input : ∀ pre s guard s'
-  → preprocess-instr pre s (private-input guard) ≡ just s' → R-instr pre s (private-input guard) s'
-preprocess-instr→R-instr-private-input _ s guard s' eq
+preprocess-instr→R-instr _ s (private-input guard) s' eq
   with >>=-just (eval-guard (Preprocessed.memory s) guard) eq
 ... | false , gf , eq₁ = from-just-R (r-private-input-inactive gf) eq₁
 ... | true  , gt , eq₁
   with >>=-just (consume-priv s) eq₁
 ... | (v , s₁) , cp , eq₂ = from-just-R (r-private-input-active gt cp) eq₂
 
--- Dispatch to the per-instruction forward lemmas.
-preprocess-instr→R-instr : ∀ pre s i s'
-  → preprocess-instr pre s i ≡ just s' → R-instr pre s i s'
-preprocess-instr→R-instr pre s (assert cond)                   = preprocess-instr→R-instr-assert                pre s cond
-preprocess-instr→R-instr pre s (cond-select bit a b)           = preprocess-instr→R-instr-cond-select            pre s bit a b
-preprocess-instr→R-instr pre s (constrain-bits var bits)       = preprocess-instr→R-instr-constrain-bits         pre s var bits
-preprocess-instr→R-instr pre s (constrain-eq a b)              = preprocess-instr→R-instr-constrain-eq           pre s a b
-preprocess-instr→R-instr pre s (constrain-to-boolean var)      = preprocess-instr→R-instr-constrain-to-boolean   pre s var
-preprocess-instr→R-instr pre s (copy var)                      = preprocess-instr→R-instr-copy                   pre s var
-preprocess-instr→R-instr pre s (declare-pub-input var)         = preprocess-instr→R-instr-declare-pub-input      pre s var
-preprocess-instr→R-instr pre s (pi-skip guard count)           = preprocess-instr→R-instr-pi-skip                pre s guard count
-preprocess-instr→R-instr pre s (ec-add a_x a_y b_x b_y)       = preprocess-instr→R-instr-ec-add                 pre s a_x a_y b_x b_y
-preprocess-instr→R-instr pre s (ec-mul a_x a_y scalar)         = preprocess-instr→R-instr-ec-mul                 pre s a_x a_y scalar
-preprocess-instr→R-instr pre s (ec-mul-generator scalar)       = preprocess-instr→R-instr-ec-mul-generator       pre s scalar
-preprocess-instr→R-instr pre s (hash-to-curve inputs)          = preprocess-instr→R-instr-hash-to-curve          pre s inputs
-preprocess-instr→R-instr pre s (load-imm imm)                  = preprocess-instr→R-instr-load-imm               pre s imm
-preprocess-instr→R-instr pre s (div-mod-power-of-two var bits) = preprocess-instr→R-instr-div-mod-power-of-two   pre s var bits
-preprocess-instr→R-instr pre s (reconstitute-field d m bits)   = preprocess-instr→R-instr-reconstitute-field     pre s d m bits
-preprocess-instr→R-instr pre s (output var)                    = preprocess-instr→R-instr-output                 pre s var
-preprocess-instr→R-instr pre s (transient-hash inputs)         = preprocess-instr→R-instr-transient-hash         pre s inputs
-preprocess-instr→R-instr pre s (persistent-hash alignment is)  = preprocess-instr→R-instr-persistent-hash        pre s alignment is
-preprocess-instr→R-instr pre s (test-eq a b)                   = preprocess-instr→R-instr-test-eq                pre s a b
-preprocess-instr→R-instr pre s (add a b)                       = preprocess-instr→R-instr-add                    pre s a b
-preprocess-instr→R-instr pre s (mul a b)                       = preprocess-instr→R-instr-mul                    pre s a b
-preprocess-instr→R-instr pre s (neg a)                         = preprocess-instr→R-instr-neg                    pre s a
-preprocess-instr→R-instr pre s (not a)                         = preprocess-instr→R-instr-not                    pre s a
-preprocess-instr→R-instr pre s (less-than a b bits)            = preprocess-instr→R-instr-less-than              pre s a b bits
-preprocess-instr→R-instr pre s (public-input guard)            = preprocess-instr→R-instr-public-input           pre s guard
-preprocess-instr→R-instr pre s (private-input guard)           = preprocess-instr→R-instr-private-input          pre s guard
 
 -- Per-instruction: relational → computational
 
-R-instr→preprocess-instr-assert : ∀ pre s cond s'
-  → R-instr pre s (assert cond) s' → preprocess-instr pre s (assert cond) ≡ just s'
-R-instr→preprocess-instr-assert _ s cond _ (r-assert la) rewrite la = refl
-
-R-instr→preprocess-instr-cond-select : ∀ pre s bit a b s'
-  → R-instr pre s (cond-select bit a b) s' → preprocess-instr pre s (cond-select bit a b) ≡ just s'
-R-instr→preprocess-instr-cond-select _ s bit a b _ (r-cond-select lsel la lb) rewrite lsel | la | lb = refl
-
-R-instr→preprocess-instr-constrain-bits : ∀ pre s var bits s'
-  → R-instr pre s (constrain-bits var bits) s' → preprocess-instr pre s (constrain-bits var bits) ≡ just s'
-R-instr→preprocess-instr-constrain-bits _ s var bits _ (r-constrain-bits lv fits) rewrite lv | fits = refl
-
-R-instr→preprocess-instr-constrain-eq : ∀ pre s a b s'
-  → R-instr pre s (constrain-eq a b) s' → preprocess-instr pre s (constrain-eq a b) ≡ just s'
-R-instr→preprocess-instr-constrain-eq _ s a b _ (r-constrain-eq la lb eq?) rewrite la | lb | eq? = refl
-
-R-instr→preprocess-instr-constrain-to-boolean : ∀ pre s var s'
-  → R-instr pre s (constrain-to-boolean var) s' → preprocess-instr pre s (constrain-to-boolean var) ≡ just s'
-R-instr→preprocess-instr-constrain-to-boolean _ s var _ (r-constrain-to-boolean lb) rewrite lb = refl
-
-R-instr→preprocess-instr-copy : ∀ pre s var s'
-  → R-instr pre s (copy var) s' → preprocess-instr pre s (copy var) ≡ just s'
-R-instr→preprocess-instr-copy _ s var _ (r-copy lv) rewrite lv = refl
-
-R-instr→preprocess-instr-declare-pub-input : ∀ pre s var s'
-  → R-instr pre s (declare-pub-input var) s' → preprocess-instr pre s (declare-pub-input var) ≡ just s'
-R-instr→preprocess-instr-declare-pub-input _ s var _ (r-declare-pub-input lv) rewrite lv = refl
-
-R-instr→preprocess-instr-pi-skip : ∀ pre s guard count s'
-  → R-instr pre s (pi-skip guard count) s' → preprocess-instr pre s (pi-skip guard count) ≡ just s'
-R-instr→preprocess-instr-pi-skip pre s guard count _ (r-pi-skip-active gt chk) rewrite gt | chk = refl
-R-instr→preprocess-instr-pi-skip pre s guard count _ (r-pi-skip-inactive gf)   rewrite gf       = refl
-
-R-instr→preprocess-instr-ec-add : ∀ pre s a_x a_y b_x b_y s'
-  → R-instr pre s (ec-add a_x a_y b_x b_y) s' → preprocess-instr pre s (ec-add a_x a_y b_x b_y) ≡ just s'
-R-instr→preprocess-instr-ec-add _ s a_x a_y b_x b_y _ (r-ec-add lax lay lbx lby add-eq)
-  rewrite lax | lay | lbx | lby | add-eq = refl
-
-R-instr→preprocess-instr-ec-mul : ∀ pre s a_x a_y scalar s'
-  → R-instr pre s (ec-mul a_x a_y scalar) s' → preprocess-instr pre s (ec-mul a_x a_y scalar) ≡ just s'
-R-instr→preprocess-instr-ec-mul _ s a_x a_y scalar _ (r-ec-mul lax lay lsc mul-eq)
-  rewrite lax | lay | lsc | mul-eq = refl
-
-R-instr→preprocess-instr-ec-mul-generator : ∀ pre s scalar s'
-  → R-instr pre s (ec-mul-generator scalar) s' → preprocess-instr pre s (ec-mul-generator scalar) ≡ just s'
-R-instr→preprocess-instr-ec-mul-generator _ s scalar _ (r-ec-mul-generator lsc gen-eq)
-  rewrite lsc | gen-eq = refl
-
-R-instr→preprocess-instr-hash-to-curve : ∀ pre s inputs s'
-  → R-instr pre s (hash-to-curve inputs) s' → preprocess-instr pre s (hash-to-curve inputs) ≡ just s'
-R-instr→preprocess-instr-hash-to-curve _ s inputs _ (r-hash-to-curve lvs htc-eq)
-  rewrite lvs | htc-eq = refl
-
-R-instr→preprocess-instr-load-imm : ∀ pre s imm s'
-  → R-instr pre s (load-imm imm) s' → preprocess-instr pre s (load-imm imm) ≡ just s'
-R-instr→preprocess-instr-load-imm _ s imm _ r-load-imm = refl
-
-R-instr→preprocess-instr-div-mod-power-of-two : ∀ pre s var bits s'
-  → R-instr pre s (div-mod-power-of-two var bits) s'
-  → preprocess-instr pre s (div-mod-power-of-two var bits) ≡ just s'
-R-instr→preprocess-instr-div-mod-power-of-two _ s var bits _ (r-div-mod-power-of-two lv) rewrite lv = refl
-
-R-instr→preprocess-instr-reconstitute-field : ∀ pre s divisor modulus bits s'
-  → R-instr pre s (reconstitute-field divisor modulus bits) s'
-  → preprocess-instr pre s (reconstitute-field divisor modulus bits) ≡ just s'
-R-instr→preprocess-instr-reconstitute-field _ s divisor modulus bits _ (r-reconstitute-field ldv lmv cond)
-  rewrite ldv | lmv | cond = refl
-
-R-instr→preprocess-instr-output : ∀ pre s var s'
-  → R-instr pre s (output var) s' → preprocess-instr pre s (output var) ≡ just s'
-R-instr→preprocess-instr-output _ s var _ (r-output lv) rewrite lv = refl
-
-R-instr→preprocess-instr-transient-hash : ∀ pre s inputs s'
-  → R-instr pre s (transient-hash inputs) s' → preprocess-instr pre s (transient-hash inputs) ≡ just s'
-R-instr→preprocess-instr-transient-hash _ s inputs _ (r-transient-hash lvs) rewrite lvs = refl
-
-R-instr→preprocess-instr-persistent-hash : ∀ pre s alignment inputs s'
-  → R-instr pre s (persistent-hash alignment inputs) s'
-  → preprocess-instr pre s (persistent-hash alignment inputs) ≡ just s'
-R-instr→preprocess-instr-persistent-hash _ s alignment inputs _ (r-persistent-hash lvs ph-eq)
-  rewrite lvs | ph-eq = refl
-
-R-instr→preprocess-instr-test-eq : ∀ pre s a b s'
-  → R-instr pre s (test-eq a b) s' → preprocess-instr pre s (test-eq a b) ≡ just s'
-R-instr→preprocess-instr-test-eq _ s a b _ (r-test-eq la lb) rewrite la | lb = refl
-
-R-instr→preprocess-instr-add : ∀ pre s a b s'
-  → R-instr pre s (add a b) s' → preprocess-instr pre s (add a b) ≡ just s'
-R-instr→preprocess-instr-add _ s a b _ (r-add la lb) rewrite la | lb = refl
-
-R-instr→preprocess-instr-mul : ∀ pre s a b s'
-  → R-instr pre s (mul a b) s' → preprocess-instr pre s (mul a b) ≡ just s'
-R-instr→preprocess-instr-mul _ s a b _ (r-mul la lb) rewrite la | lb = refl
-
-R-instr→preprocess-instr-neg : ∀ pre s a s'
-  → R-instr pre s (neg a) s' → preprocess-instr pre s (neg a) ≡ just s'
-R-instr→preprocess-instr-neg _ s a _ (r-neg la) rewrite la = refl
-
-R-instr→preprocess-instr-not : ∀ pre s a s'
-  → R-instr pre s (not a) s' → preprocess-instr pre s (not a) ≡ just s'
-R-instr→preprocess-instr-not _ s a _ (r-not lb) rewrite lb = refl
-
-R-instr→preprocess-instr-less-than : ∀ pre s a b bits s'
-  → R-instr pre s (less-than a b bits) s' → preprocess-instr pre s (less-than a b bits) ≡ just s'
-R-instr→preprocess-instr-less-than _ s a b bits _ (r-less-than la lb fits) rewrite la | lb | fits = refl
-
-R-instr→preprocess-instr-public-input : ∀ pre s guard s'
-  → R-instr pre s (public-input guard) s' → preprocess-instr pre s (public-input guard) ≡ just s'
-R-instr→preprocess-instr-public-input _ s guard _ (r-public-input-inactive gf) rewrite gf       = refl
-R-instr→preprocess-instr-public-input _ s guard _ (r-public-input-active gt cp) rewrite gt | cp = refl
-
-R-instr→preprocess-instr-private-input : ∀ pre s guard s'
-  → R-instr pre s (private-input guard) s' → preprocess-instr pre s (private-input guard) ≡ just s'
-R-instr→preprocess-instr-private-input _ s guard _ (r-private-input-inactive gf) rewrite gf       = refl
-R-instr→preprocess-instr-private-input _ s guard _ (r-private-input-active gt cp) rewrite gt | cp = refl
-
--- Dispatch to the per-instruction backward lemmas.
 R-instr→preprocess-instr : ∀ pre s i s'
   → R-instr pre s i s' → preprocess-instr pre s i ≡ just s'
-R-instr→preprocess-instr pre s (assert cond)                   = R-instr→preprocess-instr-assert                pre s cond
-R-instr→preprocess-instr pre s (cond-select bit a b)           = R-instr→preprocess-instr-cond-select            pre s bit a b
-R-instr→preprocess-instr pre s (constrain-bits var bits)       = R-instr→preprocess-instr-constrain-bits         pre s var bits
-R-instr→preprocess-instr pre s (constrain-eq a b)              = R-instr→preprocess-instr-constrain-eq           pre s a b
-R-instr→preprocess-instr pre s (constrain-to-boolean var)      = R-instr→preprocess-instr-constrain-to-boolean   pre s var
-R-instr→preprocess-instr pre s (copy var)                      = R-instr→preprocess-instr-copy                   pre s var
-R-instr→preprocess-instr pre s (declare-pub-input var)         = R-instr→preprocess-instr-declare-pub-input      pre s var
-R-instr→preprocess-instr pre s (pi-skip guard count)           = R-instr→preprocess-instr-pi-skip                pre s guard count
-R-instr→preprocess-instr pre s (ec-add a_x a_y b_x b_y)       = R-instr→preprocess-instr-ec-add                 pre s a_x a_y b_x b_y
-R-instr→preprocess-instr pre s (ec-mul a_x a_y scalar)         = R-instr→preprocess-instr-ec-mul                 pre s a_x a_y scalar
-R-instr→preprocess-instr pre s (ec-mul-generator scalar)       = R-instr→preprocess-instr-ec-mul-generator       pre s scalar
-R-instr→preprocess-instr pre s (hash-to-curve inputs)          = R-instr→preprocess-instr-hash-to-curve          pre s inputs
-R-instr→preprocess-instr pre s (load-imm imm)                  = R-instr→preprocess-instr-load-imm               pre s imm
-R-instr→preprocess-instr pre s (div-mod-power-of-two var bits) = R-instr→preprocess-instr-div-mod-power-of-two   pre s var bits
-R-instr→preprocess-instr pre s (reconstitute-field d m bits)   = R-instr→preprocess-instr-reconstitute-field     pre s d m bits
-R-instr→preprocess-instr pre s (output var)                    = R-instr→preprocess-instr-output                 pre s var
-R-instr→preprocess-instr pre s (transient-hash inputs)         = R-instr→preprocess-instr-transient-hash         pre s inputs
-R-instr→preprocess-instr pre s (persistent-hash alignment is)  = R-instr→preprocess-instr-persistent-hash        pre s alignment is
-R-instr→preprocess-instr pre s (test-eq a b)                   = R-instr→preprocess-instr-test-eq                pre s a b
-R-instr→preprocess-instr pre s (add a b)                       = R-instr→preprocess-instr-add                    pre s a b
-R-instr→preprocess-instr pre s (mul a b)                       = R-instr→preprocess-instr-mul                    pre s a b
-R-instr→preprocess-instr pre s (neg a)                         = R-instr→preprocess-instr-neg                    pre s a
-R-instr→preprocess-instr pre s (not a)                         = R-instr→preprocess-instr-not                    pre s a
-R-instr→preprocess-instr pre s (less-than a b bits)            = R-instr→preprocess-instr-less-than              pre s a b bits
-R-instr→preprocess-instr pre s (public-input guard)            = R-instr→preprocess-instr-public-input           pre s guard
-R-instr→preprocess-instr pre s (private-input guard)           = R-instr→preprocess-instr-private-input          pre s guard
+R-instr→preprocess-instr _ s (assert cond) _ (r-assert la) rewrite la = refl
+
+R-instr→preprocess-instr _ s (cond-select bit a b) _ (r-cond-select lsel la lb) rewrite lsel | la | lb = refl
+
+R-instr→preprocess-instr _ s (constrain-bits var bits) _ (r-constrain-bits lv fits) rewrite lv | fits = refl
+
+R-instr→preprocess-instr _ s (constrain-eq a b) _ (r-constrain-eq la lb eq?) rewrite la | lb | eq? = refl
+
+R-instr→preprocess-instr _ s (constrain-to-boolean var) _ (r-constrain-to-boolean lb) rewrite lb = refl
+
+R-instr→preprocess-instr _ s (copy var) _ (r-copy lv) rewrite lv = refl
+
+R-instr→preprocess-instr _ s (declare-pub-input var) _ (r-declare-pub-input lv) rewrite lv = refl
+
+R-instr→preprocess-instr pre s (pi-skip guard count) _ (r-pi-skip-active gt chk) rewrite gt | chk = refl
+R-instr→preprocess-instr pre s (pi-skip guard count) _ (r-pi-skip-inactive gf)   rewrite gf       = refl
+
+R-instr→preprocess-instr _ s (ec-add a_x a_y b_x b_y) _ (r-ec-add lax lay lbx lby add-eq)
+  rewrite lax | lay | lbx | lby | add-eq = refl
+
+R-instr→preprocess-instr _ s (ec-mul a_x a_y scalar) _ (r-ec-mul lax lay lsc mul-eq)
+  rewrite lax | lay | lsc | mul-eq = refl
+
+R-instr→preprocess-instr _ s (ec-mul-generator scalar) _ (r-ec-mul-generator lsc gen-eq)
+  rewrite lsc | gen-eq = refl
+
+R-instr→preprocess-instr _ s (hash-to-curve inputs) _ (r-hash-to-curve lvs htc-eq)
+  rewrite lvs | htc-eq = refl
+
+R-instr→preprocess-instr _ s (load-imm imm) _ r-load-imm = refl
+
+R-instr→preprocess-instr _ s (div-mod-power-of-two var bits) _ (r-div-mod-power-of-two lv) rewrite lv = refl
+
+R-instr→preprocess-instr _ s (reconstitute-field divisor modulus bits) _ (r-reconstitute-field ldv lmv cond)
+  rewrite ldv | lmv | cond = refl
+
+R-instr→preprocess-instr _ s (output var) _ (r-output lv) rewrite lv = refl
+
+R-instr→preprocess-instr _ s (transient-hash inputs) _ (r-transient-hash lvs) rewrite lvs = refl
+
+R-instr→preprocess-instr _ s (persistent-hash alignment inputs) _ (r-persistent-hash lvs ph-eq)
+  rewrite lvs | ph-eq = refl
+
+R-instr→preprocess-instr _ s (test-eq a b) _ (r-test-eq la lb) rewrite la | lb = refl
+
+R-instr→preprocess-instr _ s (add a b) _ (r-add la lb) rewrite la | lb = refl
+
+R-instr→preprocess-instr _ s (mul a b) _ (r-mul la lb) rewrite la | lb = refl
+
+R-instr→preprocess-instr _ s (neg a) _ (r-neg la) rewrite la = refl
+
+R-instr→preprocess-instr _ s (not a) _ (r-not lb) rewrite lb = refl
+
+R-instr→preprocess-instr _ s (less-than a b bits) _ (r-less-than la lb fits) rewrite la | lb | fits = refl
+
+R-instr→preprocess-instr _ s (public-input guard) _ (r-public-input-inactive gf) rewrite gf       = refl
+R-instr→preprocess-instr _ s (public-input guard) _ (r-public-input-active gt cp) rewrite gt | cp = refl
+
+R-instr→preprocess-instr _ s (private-input guard) _ (r-private-input-inactive gf) rewrite gf       = refl
+R-instr→preprocess-instr _ s (private-input guard) _ (r-private-input-active gt cp) rewrite gt | cp = refl
+
 
 -- Lift faithfulness from instructions to instruction sequences.
 

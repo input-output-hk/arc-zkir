@@ -48,7 +48,7 @@ open import Data.List.Properties using (length-++)
 open import Data.Maybe     using (Maybe; nothing; just; _>>=_)
 open import Data.Maybe.Properties using (just-injective)
 open import Data.Nat       using (ℕ; zero; suc; _+_; _∸_; _≡ᵇ_)
-open import Data.Nat.Properties using (+-identityʳ; +-suc; +-comm)
+open import Data.Nat.Properties using (+-identityʳ; +-suc)
 open import Data.Product   using (_×_; _,_; ∃-syntax; proj₁; proj₂)
 open import Data.Sum       using (_⊎_; inj₁; inj₂)
 open import Data.Empty     using (⊥; ⊥-elim)
@@ -98,15 +98,6 @@ private
     → mem-lookup (mem ++ (x ∷ y ∷ [])) (suc (length mem)) ≡ just y
   lookup-new-snd []       x y = refl
   lookup-new-snd (z ∷ zs) x y = lookup-new-snd zs x y
-
-  just-inj : ∀ {A : Set} {x y : A} → just x ≡ just y → x ≡ y
-  just-inj = just-injective
-
-  lookup-uniq : ∀ (mem : List Fr) (i : Index) {v w}
-    → mem-lookup mem i ≡ just v
-    → mem-lookup mem i ≡ just w
-    → v ≡ w
-  lookup-uniq _ _ p q = just-injective (trans (sym p) q)
 
   ------------------------------------------------------------------
   -- Bool reasoning lemmas
@@ -184,13 +175,22 @@ private
   ℕ<-self-suc zero    = z<s
   ℕ<-self-suc (suc n) = s<s (ℕ<-self-suc n)
 
-  -- Length of `mem ++ (v ∷ [])` is `suc (length mem)` — already
-  -- proven as `length-++-one`; we re-use that here.
-  ℕ<-step-of-record : ∀ {j i} → j ℕ< i → j ℕ< suc i
-  ℕ<-step-of-record = ℕ<-suc
+  ℕ<-irrefl-base : ∀ {n} → ¬ (n ℕ< n)
+  ℕ<-irrefl-base (s<s p') = ℕ<-irrefl-base p'
 
-  ℕ<-step-of-record-2 : ∀ {j i} → j ℕ< i → j ℕ< suc (suc i)
-  ℕ<-step-of-record-2 p = ℕ<-suc (ℕ<-suc p)
+  ℕ<-strict-irrefl-base : ∀ {n} → ¬ (suc n ℕ< n)
+  ℕ<-strict-irrefl-base {suc n} (s<s p) = ℕ<-strict-irrefl-base p
+
+  -- An `n ℕ< i` follows from a successful mem-lookup at index n in a
+  -- memory of length matching i.
+  lookup-bound : ∀ (mem : List Fr) (j : Index) {val : Fr}
+    → mem-lookup mem j ≡ just val
+    → ∀ {i₀} → i₀ ≡ length mem
+    → j ℕ< i₀
+  lookup-bound (x ∷ xs) zero    eq   refl = z<s
+  lookup-bound (x ∷ xs) (suc j) eq   refl =
+    s<s (lookup-bound xs j eq refl)
+  lookup-bound []       _       ()   _
 
 record O2-Inv (acc : ℕ × IndexSet) (s : Preprocessed) : Set where
   constructor mk-o2-inv
@@ -264,11 +264,6 @@ private
   ------------------------------------------------------------------
   -- Push-mem and lookup helpers
   ------------------------------------------------------------------
-
-  -- The "post" memory of push-mem s newv is mem s ++ (newv ∷ []).
-  push-mem-mem : ∀ s newv
-    → Preprocessed.memory (push-mem s newv) ≡ Preprocessed.memory s ++ (newv ∷ [])
-  push-mem-mem s newv = refl
 
   -- Going from a lookup in mem ++ (newv ∷ []) back to mem, given j ≠ length mem.
   -- Equivalently: if `mem-lookup (mem ++ (newv ∷ [])) j ≡ just v` and
@@ -404,17 +399,7 @@ private
       idx-eq = trans (idx-sync inv) (sym (cong length mem-eq))
 
       v<i : v ℕ< i
-      v<i = lookup-< (Preprocessed.memory s) v vv lv (idx-sync inv)
-        where
-          -- A successful mem-lookup at index j proves j < length mem.
-          lookup-< : ∀ (mem : List Fr) (j : Index) (val : Fr)
-            → mem-lookup mem j ≡ just val
-            → ∀ {i₀} → i₀ ≡ length mem
-            → j ℕ< i₀
-          lookup-< (x ∷ xs) zero    val refl refl = z<s
-          lookup-< (x ∷ xs) (suc j) val eq   refl =
-            s<s (lookup-< xs j val eq refl)
-          lookup-< []       _       _   ()   _
+      v<i = lookup-bound (Preprocessed.memory s) v lv (idx-sync inv)
 
       bnd : ∀ {j} → j ∈bk (insert v bk) → j ℕ< i
       bnd {j} (here eq) = subst (_ℕ< i) (sym (≡ᵇ-true eq)) v<i
@@ -466,11 +451,8 @@ private
       ... | inj₂ (j≡L , w≡) =
         -- j = length mem ⇒ j ≡ i.  But bk-bound says j ℕ< i, i.e. j < i.
         -- Contradiction.
-        ⊥-elim (ℕ<-irrefl (subst (_ℕ< i) j-is-i (bk-bound inv j∈)))
+        ⊥-elim (ℕ<-irrefl-base (subst (_ℕ< i) j-is-i (bk-bound inv j∈)))
         where
-          ℕ<-irrefl : ∀ {n} → ¬ (n ℕ< n)
-          ℕ<-irrefl (s<s p) = ℕ<-irrefl p
-
           j-is-i : j ≡ i
           j-is-i = trans j≡L (sym (idx-sync inv))
 
@@ -521,10 +503,7 @@ private
         with lookup-shrink-or-new mem newv j w lookup-eq
       ... | inj₁ q          = bit-known inv p q
       ... | inj₂ (j≡L , _)  =
-        ⊥-elim (ℕ<-irrefl (subst (_ℕ< i) (trans j≡L (sym (idx-sync inv))) (bk-bound inv p)))
-        where
-          ℕ<-irrefl : ∀ {n} → ¬ (n ℕ< n)
-          ℕ<-irrefl (s<s p') = ℕ<-irrefl p'
+        ⊥-elim (ℕ<-irrefl-base (subst (_ℕ< i) (trans j≡L (sym (idx-sync inv))) (bk-bound inv p)))
 
   ------------------------------------------------------------------
   -- (e) Memory grows by two cells (push-mem2 or iterated push-mem),
@@ -553,21 +532,14 @@ private
         with lookup-shrink-or-new-2 mem x y j w lookup-eq
       ... | inj₁ p          = bit-known inv j∈ p
       ... | inj₂ (inj₁ (j≡L , _))      =
-        ⊥-elim (ℕ<-irrefl
+        ⊥-elim (ℕ<-irrefl-base
                   (subst (_ℕ< i) (trans j≡L (sym (idx-sync inv)))
                                  (bk-bound inv j∈)))
-        where
-          ℕ<-irrefl : ∀ {n} → ¬ (n ℕ< n)
-          ℕ<-irrefl (s<s p') = ℕ<-irrefl p'
       ... | inj₂ (inj₂ (j≡sucL , _))  =
-        ⊥-elim (ℕ<-strict-irrefl
+        ⊥-elim (ℕ<-strict-irrefl-base
                   (subst (_ℕ< i)
                          (trans j≡sucL (cong suc (sym (idx-sync inv))))
                          (bk-bound inv j∈)))
-        where
-          -- suc i ℕ< i is impossible.
-          ℕ<-strict-irrefl : ∀ {n} → ¬ (suc n ℕ< n)
-          ℕ<-strict-irrefl {suc n} (s<s p) = ℕ<-strict-irrefl p
 
 ------------------------------------------------------------------------
 -- Main per-step preservation theorem (O2)
@@ -580,14 +552,7 @@ private
 -- bk') s'`.
 ------------------------------------------------------------------------
 
--- Helper that pairs the post-state's memory equality with the iterated
--- push-mem shape used by `div-mod-power-of-two`.
 private
-  push-mem-push-mem-mem : ∀ s x y
-    → Preprocessed.memory (push-mem (push-mem s x) y)
-      ≡ (Preprocessed.memory s ++ (x ∷ [])) ++ (y ∷ [])
-  push-mem-push-mem-mem s x y = refl
-
   -- Bridge between `mem ++ (x ∷ y ∷ [])` and `(mem ++ (x ∷ [])) ++ (y ∷ [])`.
   ++-assoc-2 : ∀ {A : Set} (mem : List A) (x y : A)
     → (mem ++ (x ∷ [])) ++ (y ∷ []) ≡ mem ++ (x ∷ y ∷ [])
@@ -648,6 +613,25 @@ private
     → O2-Inv (i' , bk) s
   inv-coerce-idx refl inv = inv
 
+  -- Coercion-bundled frame steps.  Each produces the invariant at the
+  -- `i + Δmem` index that `O2-step` demands, hiding the `+-Δ-r` index
+  -- arithmetic that otherwise clutters every `o2-preserve` clause.
+  step-0 : ∀ {i bk s s'} → Preprocessed.memory s' ≡ Preprocessed.memory s
+    → O2-Inv (i , bk) s → O2-Inv (i + 0 , bk) s'
+  step-0 {i = i} eq inv = inv-coerce-idx (sym (+-0-r i)) (frame-no-grow-no-record eq inv)
+
+  step-1 : ∀ {i bk s newv}
+    → O2-Inv (i , bk) s → O2-Inv (i + 1 , bk) (push-mem s newv)
+  step-1 {i = i} inv = inv-coerce-idx (sym (+-1-r i)) (frame-push-mem-no-record inv)
+
+  step-1-rec : ∀ {i bk s newv} → is-bit newv
+    → O2-Inv (i , bk) s → O2-Inv (i + 1 , insert i bk) (push-mem s newv)
+  step-1-rec {i = i} bit inv = inv-coerce-idx (sym (+-1-r i)) (frame-push-mem-record bit inv)
+
+  step-2 : ∀ {i bk s x y}
+    → O2-Inv (i , bk) s → O2-Inv (i + 2 , bk) (push-mem2 s x y)
+  step-2 {i = i} inv = inv-coerce-idx (sym (+-2-r i)) (frame-push-mem-2-no-record-app inv)
+
 ------------------------------------------------------------------------
 -- Main per-step preservation theorem (O2)
 --
@@ -675,14 +659,13 @@ o2-preserve : ∀ {pre s s' instr i bk acc'}
 o2-preserve {instr = assert c} {i = i} {bk = bk} inv
             (r-assert lookup-c-bool) step-eq
   with mem? c bk | step-eq
-... | true  | refl = inv-coerce-idx (sym (+-0-r i))
-                                    (frame-no-grow-no-record refl inv)
+... | true  | refl = step-0 refl inv
 -- (the `mem? c bk ≡ false` case is excluded because step-eq would be nothing)
 
 -- constrain-eq: record is a no-op.
 o2-preserve {instr = constrain-eq a b} {i = i} inv
             (r-constrain-eq _ _ _) refl =
-  inv-coerce-idx (sym (+-0-r i)) (frame-no-grow-no-record refl inv)
+  step-0 refl inv
 
 -- constrain-bits: record is a no-op under our conservative under-
 -- approximation (see Obligations.agda; we don't add v to bool-known
@@ -690,7 +673,7 @@ o2-preserve {instr = constrain-eq a b} {i = i} inv
 -- outside the postulated bit-arithmetic trust base).
 o2-preserve {instr = constrain-bits v bits} {i = i} inv
             (r-constrain-bits _ _) refl =
-  inv-coerce-idx (sym (+-0-r i)) (frame-no-grow-no-record refl inv)
+  step-0 refl inv
 
 -- constrain-to-boolean v: record adds `v` to bk.
 o2-preserve {s = s} {instr = constrain-to-boolean v} {i = i} {bk = bk} inv
@@ -702,22 +685,22 @@ o2-preserve {s = s} {instr = constrain-to-boolean v} {i = i} {bk = bk} inv
 -- declare-pub-input: memory unchanged (push-pi), record is a no-op.
 o2-preserve {instr = declare-pub-input v} {i = i} inv
             (r-declare-pub-input _) refl =
-  inv-coerce-idx (sym (+-0-r i)) (frame-no-grow-no-record refl inv)
+  step-0 refl inv
 
 -- pi-skip active / inactive: memory unchanged (push-skip; pi-skip
 -- inactive additionally modifies pub-in-idx, which doesn't touch
 -- memory), no record.
 o2-preserve {instr = pi-skip g n} {i = i} inv
             (r-pi-skip-active _ _) refl =
-  inv-coerce-idx (sym (+-0-r i)) (frame-no-grow-no-record refl inv)
+  step-0 refl inv
 o2-preserve {instr = pi-skip g n} {i = i} inv
             (r-pi-skip-inactive _) refl =
-  inv-coerce-idx (sym (+-0-r i)) (frame-no-grow-no-record refl inv)
+  step-0 refl inv
 
 -- output: memory unchanged (push-output), record is a no-op.
 o2-preserve {instr = output v} {i = i} inv
             (r-output _) refl =
-  inv-coerce-idx (sym (+-0-r i)) (frame-no-grow-no-record refl inv)
+  step-0 refl inv
 
 -- ============================================================
 -- Δmem = 1 instructions
@@ -732,8 +715,7 @@ o2-preserve {instr = cond-select bit a b} {i = i} {bk = bk} inv
 ... | true  | step-eq'
   with mem? a bk in a-eq | mem? b bk in b-eq | step-eq'
 ... | true  | true  | refl =
-  inv-coerce-idx (sym (+-1-r i))
-    (frame-push-mem-record (if-sel-bit sel) inv)
+  step-1-rec (if-sel-bit sel) inv
   where
     av-bit : is-bit av
     av-bit = bit-known inv (mem?-true {bk = bk} a-eq) la
@@ -745,9 +727,9 @@ o2-preserve {instr = cond-select bit a b} {i = i} {bk = bk} inv
     if-sel-bit true  = av-bit
     if-sel-bit false = bv-bit
 ... | true  | false | refl =
-  inv-coerce-idx (sym (+-1-r i)) (frame-push-mem-no-record inv)
+  step-1 inv
 ... | false | _     | refl =
-  inv-coerce-idx (sym (+-1-r i)) (frame-push-mem-no-record inv)
+  step-1 inv
 
 -- copy v: record adds new index `i` to bk if `v ∈ bk`.
 o2-preserve {instr = copy v} {i = i} {bk = bk} inv
@@ -756,54 +738,51 @@ o2-preserve {instr = copy v} {i = i} {bk = bk} inv
 ... | true  =
   let vv-bit : is-bit vv
       vv-bit = bit-known inv (mem?-true {bk = bk} v-eq) lv
-  in inv-coerce-idx (sym (+-1-r i)) (frame-push-mem-record vv-bit inv)
+  in step-1-rec vv-bit inv
 ... | false =
-  inv-coerce-idx (sym (+-1-r i)) (frame-push-mem-no-record inv)
+  step-1 inv
 
 -- load-imm k: under our conservative `is-bool-imm? _ = false`,
 -- O2-record never adds for load-imm.  (See Obligations.agda.)
 o2-preserve {instr = load-imm k} {i = i} inv r-load-imm refl =
-  inv-coerce-idx (sym (+-1-r i)) (frame-push-mem-no-record inv)
+  step-1 inv
 
 -- add / mul / neg: push-mem, never record.
 o2-preserve {instr = add a b} {i = i} inv (r-add _ _) refl =
-  inv-coerce-idx (sym (+-1-r i)) (frame-push-mem-no-record inv)
+  step-1 inv
 o2-preserve {instr = mul a b} {i = i} inv (r-mul _ _) refl =
-  inv-coerce-idx (sym (+-1-r i)) (frame-push-mem-no-record inv)
+  step-1 inv
 o2-preserve {instr = neg a} {i = i} inv (r-neg _) refl =
-  inv-coerce-idx (sym (+-1-r i)) (frame-push-mem-no-record inv)
+  step-1 inv
 
 -- test-eq: push-mem (from-bool (av ≡ᶠ? bv)) — always records, value
 -- is from-bool of a Bool, hence is-bit.
 o2-preserve {instr = test-eq a b} {i = i} inv (r-test-eq {av = av} {bv = bv} _ _) refl =
-  inv-coerce-idx (sym (+-1-r i))
-    (frame-push-mem-record (from-bool-is-bit (av ≡ᶠ? bv)) inv)
+  step-1-rec (from-bool-is-bit (av ≡ᶠ? bv)) inv
 
 -- not: check requires `a ∈ bk`; always records (from-bool (Bool.not b)).
 o2-preserve {instr = not a} {i = i} {bk = bk} inv (r-not {b = b} _) step-eq
   with mem? a bk | step-eq
 ... | true  | refl =
-  inv-coerce-idx (sym (+-1-r i))
-    (frame-push-mem-record (from-bool-is-bit (Bool.not b)) inv)
+  step-1-rec (from-bool-is-bit (Bool.not b)) inv
 
 -- less-than: push-mem (from-bool (bits-lt …)) — always records.
 o2-preserve {instr = less-than a b bits} {i = i} inv
             (r-less-than {av = av} {bv = bv} _ _ _) refl =
-  inv-coerce-idx (sym (+-1-r i))
-    (frame-push-mem-record
-      (from-bool-is-bit
-        (bits-lt (take bits (to-le-bits av)) (take bits (to-le-bits bv)))) inv)
+  step-1-rec
+    (from-bool-is-bit
+      (bits-lt (take bits (to-le-bits av)) (take bits (to-le-bits bv)))) inv
 
 -- reconstitute-field: push-mem of a single combined value; Δmem = 1.
 -- No record.
 o2-preserve {instr = reconstitute-field d m bits} {i = i} inv
             (r-reconstitute-field _ _ _) refl =
-  inv-coerce-idx (sym (+-1-r i)) (frame-push-mem-no-record inv)
+  step-1 inv
 
 -- public-input inactive: push-mem s 0ᶠ.  No record.
 o2-preserve {instr = public-input g} {i = i} inv
             (r-public-input-inactive _) refl =
-  inv-coerce-idx (sym (+-1-r i)) (frame-push-mem-no-record inv)
+  step-1 inv
 
 -- public-input active: push-mem s₁ v where s₁ has same memory as s.
 -- After push, memory grows by one.  No record.
@@ -814,24 +793,24 @@ o2-preserve {s = s} {instr = public-input g} {i = i} inv
       -- inv at s₁ (memory equal):
       inv-s₁ : O2-Inv (i , _) s₁
       inv-s₁ = frame-no-grow-no-record mem-s₁ inv
-  in inv-coerce-idx (sym (+-1-r i)) (frame-push-mem-no-record inv-s₁)
+  in step-1 inv-s₁
 
 -- private-input inactive / active: same shape as public-input.
 o2-preserve {instr = private-input g} {i = i} inv
             (r-private-input-inactive _) refl =
-  inv-coerce-idx (sym (+-1-r i)) (frame-push-mem-no-record inv)
+  step-1 inv
 o2-preserve {s = s} {instr = private-input g} {i = i} inv
             (r-private-input-active {s₁ = s₁} _ s₁-eq) refl =
   let mem-s₁ : Preprocessed.memory s₁ ≡ Preprocessed.memory s
       mem-s₁ = consume-priv-mem-eq s s₁-eq
       inv-s₁ : O2-Inv (i , _) s₁
       inv-s₁ = frame-no-grow-no-record mem-s₁ inv
-  in inv-coerce-idx (sym (+-1-r i)) (frame-push-mem-no-record inv-s₁)
+  in step-1 inv-s₁
 
 -- transient-hash: push-mem (transient-hash-fn vs).  No record.
 o2-preserve {instr = transient-hash xs} {i = i} inv
             (r-transient-hash _) refl =
-  inv-coerce-idx (sym (+-1-r i)) (frame-push-mem-no-record inv)
+  step-1 inv
 
 -- ============================================================
 -- Δmem = 2 instructions
@@ -841,19 +820,19 @@ o2-preserve {instr = transient-hash xs} {i = i} inv
 -- push-mem2 s x y.  No record.
 o2-preserve {instr = ec-add a_x a_y b_x b_y} {i = i} inv
             (r-ec-add _ _ _ _ _) refl =
-  inv-coerce-idx (sym (+-2-r i)) (frame-push-mem-2-no-record-app inv)
+  step-2 inv
 o2-preserve {instr = ec-mul a_x a_y scalar} {i = i} inv
             (r-ec-mul _ _ _ _) refl =
-  inv-coerce-idx (sym (+-2-r i)) (frame-push-mem-2-no-record-app inv)
+  step-2 inv
 o2-preserve {instr = ec-mul-generator scalar} {i = i} inv
             (r-ec-mul-generator _ _) refl =
-  inv-coerce-idx (sym (+-2-r i)) (frame-push-mem-2-no-record-app inv)
+  step-2 inv
 o2-preserve {instr = hash-to-curve xs} {i = i} inv
             (r-hash-to-curve _ _) refl =
-  inv-coerce-idx (sym (+-2-r i)) (frame-push-mem-2-no-record-app inv)
+  step-2 inv
 o2-preserve {instr = persistent-hash a xs} {i = i} inv
             (r-persistent-hash _ _) refl =
-  inv-coerce-idx (sym (+-2-r i)) (frame-push-mem-2-no-record-app inv)
+  step-2 inv
 
 -- div-mod-power-of-two: push-mem (push-mem s x) y — iterated.  No
 -- record.  Uses the special frame for iterated push-mem.
@@ -1055,36 +1034,6 @@ private
     → O3-Inv (i' , bm) s
   o3-inv-coerce-idx refl inv = inv
 
-  -- lookupᵐ on insertᵐ: at the same key, returns the new value; at a
-  -- different key, falls through.  (Note: insertᵐ shadows old bindings.)
-  lookupᵐ-insertᵐ-eq : ∀ (k : Index) n bm
-    → lookupᵐ k (insertᵐ k n bm) ≡ just n
-  lookupᵐ-insertᵐ-eq k n bm rewrite ≡ᵇ-refl k = refl
-
-  -- lookupᵐ on insertᵐ at a different key: pure fall-through.  We
-  -- characterise via the boolean condition.
-  lookupᵐ-insertᵐ-shape : ∀ (j k : Index) n bm
-    → lookupᵐ j (insertᵐ k n bm) ≡
-        (if j ≡ᵇ k then just n else lookupᵐ j bm)
-  lookupᵐ-insertᵐ-shape j k n bm = refl
-
-  -- An `n ℕ< i` follows from a successful mem-lookup at index n in a
-  -- memory of length matching i.
-  lookup-bound : ∀ (mem : List Fr) (j : Index) {val : Fr}
-    → mem-lookup mem j ≡ just val
-    → ∀ {i₀} → i₀ ≡ length mem
-    → j ℕ< i₀
-  lookup-bound (x ∷ xs) zero    eq   refl = z<s
-  lookup-bound (x ∷ xs) (suc j) eq   refl =
-    s<s (lookup-bound xs j eq refl)
-  lookup-bound []       _       ()   _
-
-  ℕ<-irrefl-base : ∀ {n} → ¬ (n ℕ< n)
-  ℕ<-irrefl-base (s<s p') = ℕ<-irrefl-base p'
-
-  ℕ<-strict-irrefl-base : ∀ {n} → ¬ (suc n ℕ< n)
-  ℕ<-strict-irrefl-base {suc n} (s<s p) = ℕ<-strict-irrefl-base p
-
   -- Frame for O3: memory unchanged, map unchanged.
   o3-frame-no-grow : ∀ {i bm s s'}
     → Preprocessed.memory s' ≡ Preprocessed.memory s
@@ -1153,6 +1102,20 @@ private
                   (subst (_ℕ< i)
                          (trans j≡sL (cong suc (sym (idx-sync inv))))
                          (bm-bound inv look)))
+
+  -- Coercion-bundled O3 frame steps (mirror of step-0/1/2 on the O2
+  -- side): produce the invariant at the `i + Δmem` index.
+  o3-step-0 : ∀ {i bm s s'} → Preprocessed.memory s' ≡ Preprocessed.memory s
+    → O3-Inv (i , bm) s → O3-Inv (i + 0 , bm) s'
+  o3-step-0 {i = i} eq inv = o3-inv-coerce-idx (sym (+-0-r i)) (o3-frame-no-grow eq inv)
+
+  o3-step-1 : ∀ {i bm s newv}
+    → O3-Inv (i , bm) s → O3-Inv (i + 1 , bm) (push-mem s newv)
+  o3-step-1 {i = i} inv = o3-inv-coerce-idx (sym (+-1-r i)) (o3-frame-push-mem inv)
+
+  o3-step-2 : ∀ {i bm s x y}
+    → O3-Inv (i , bm) s → O3-Inv (i + 2 , bm) (push-mem2 s x y)
+  o3-step-2 {i = i} inv = o3-inv-coerce-idx (sym (+-2-r i)) (o3-frame-push-mem-2 inv)
 
   -- Frame for O3: iterated push-mem (for div-mod-power-of-two).
   o3-frame-push-mem-push-mem : ∀ {i bm s x y}
@@ -1406,21 +1369,21 @@ o3-preserve : ∀ {pre s s' instr i bm acc'}
   → O3-Inv acc' s'
 -- Δmem = 0 cases (no record under our conservative O3-record)
 o3-preserve {instr = assert c} {i = i} inv (r-assert _) refl =
-  o3-inv-coerce-idx (sym (+-0-r i)) (o3-frame-no-grow refl inv)
+  o3-step-0 refl inv
 o3-preserve {instr = constrain-eq a b} {i = i} inv (r-constrain-eq _ _ _) refl =
-  o3-inv-coerce-idx (sym (+-0-r i)) (o3-frame-no-grow refl inv)
+  o3-step-0 refl inv
 o3-preserve {instr = constrain-to-boolean v} {i = i} inv
             (r-constrain-to-boolean _) refl =
-  o3-inv-coerce-idx (sym (+-0-r i)) (o3-frame-no-grow refl inv)
+  o3-step-0 refl inv
 o3-preserve {instr = declare-pub-input v} {i = i} inv
             (r-declare-pub-input _) refl =
-  o3-inv-coerce-idx (sym (+-0-r i)) (o3-frame-no-grow refl inv)
+  o3-step-0 refl inv
 o3-preserve {instr = pi-skip g n} {i = i} inv (r-pi-skip-active _ _) refl =
-  o3-inv-coerce-idx (sym (+-0-r i)) (o3-frame-no-grow refl inv)
+  o3-step-0 refl inv
 o3-preserve {instr = pi-skip g n} {i = i} inv (r-pi-skip-inactive _) refl =
-  o3-inv-coerce-idx (sym (+-0-r i)) (o3-frame-no-grow refl inv)
+  o3-step-0 refl inv
 o3-preserve {instr = output v} {i = i} inv (r-output _) refl =
-  o3-inv-coerce-idx (sym (+-0-r i)) (o3-frame-no-grow refl inv)
+  o3-step-0 refl inv
 
 -- constrain-bits v n: record inserts (v, n).  Justified by r-constrain-bits.
 o3-preserve {instr = constrain-bits v n} {i = i} inv
@@ -1431,69 +1394,69 @@ o3-preserve {instr = constrain-bits v n} {i = i} inv
 -- Δmem = 1 cases (no record under conservative O3-record except copy)
 o3-preserve {instr = cond-select bit a b} {i = i} inv
             (r-cond-select _ _ _) refl =
-  o3-inv-coerce-idx (sym (+-1-r i)) (o3-frame-push-mem inv)
+  o3-step-1 inv
 o3-preserve {instr = copy v} {i = i} {bm = bm} inv (r-copy {v = vv} lv) refl
   with lookupᵐ v bm in vbm-eq
 ... | just k  =
   o3-inv-coerce-idx (sym (+-1-r i)) (o3-frame-push-mem-copy vbm-eq lv inv)
 ... | nothing =
-  o3-inv-coerce-idx (sym (+-1-r i)) (o3-frame-push-mem inv)
+  o3-step-1 inv
 o3-preserve {instr = load-imm k} {i = i} inv r-load-imm refl =
-  o3-inv-coerce-idx (sym (+-1-r i)) (o3-frame-push-mem inv)
+  o3-step-1 inv
 o3-preserve {instr = add a b} {i = i} inv (r-add _ _) refl =
-  o3-inv-coerce-idx (sym (+-1-r i)) (o3-frame-push-mem inv)
+  o3-step-1 inv
 o3-preserve {instr = mul a b} {i = i} inv (r-mul _ _) refl =
-  o3-inv-coerce-idx (sym (+-1-r i)) (o3-frame-push-mem inv)
+  o3-step-1 inv
 o3-preserve {instr = neg a} {i = i} inv (r-neg _) refl =
-  o3-inv-coerce-idx (sym (+-1-r i)) (o3-frame-push-mem inv)
+  o3-step-1 inv
 o3-preserve {instr = test-eq a b} {i = i} inv (r-test-eq _ _) refl =
-  o3-inv-coerce-idx (sym (+-1-r i)) (o3-frame-push-mem inv)
+  o3-step-1 inv
 o3-preserve {instr = not a} {i = i} inv (r-not _) refl =
-  o3-inv-coerce-idx (sym (+-1-r i)) (o3-frame-push-mem inv)
+  o3-step-1 inv
 o3-preserve {instr = less-than a b bits} {i = i} {bm = bm} inv
             (r-less-than _ _ _) step-eq
   with O3-check (less-than a b bits) bm | step-eq
 ... | true  | refl =
-  o3-inv-coerce-idx (sym (+-1-r i)) (o3-frame-push-mem inv)
+  o3-step-1 inv
 ... | false | ()
 o3-preserve {instr = reconstitute-field d m bits} {i = i} {bm = bm} inv
             (r-reconstitute-field _ _ _) step-eq
   with O3-check (reconstitute-field d m bits) bm | step-eq
 ... | true  | refl =
-  o3-inv-coerce-idx (sym (+-1-r i)) (o3-frame-push-mem inv)
+  o3-step-1 inv
 ... | false | ()
 o3-preserve {instr = public-input g} {i = i} inv
             (r-public-input-inactive _) refl =
-  o3-inv-coerce-idx (sym (+-1-r i)) (o3-frame-push-mem inv)
+  o3-step-1 inv
 o3-preserve {s = s} {instr = public-input g} {i = i} inv
             (r-public-input-active {s₁ = s₁} _ s₁-eq) refl =
   let mem-eq : Preprocessed.memory s₁ ≡ Preprocessed.memory s
       mem-eq = consume-pub-out-mem-eq s s₁-eq
       inv-s₁ = o3-frame-no-grow mem-eq inv
-  in o3-inv-coerce-idx (sym (+-1-r i)) (o3-frame-push-mem inv-s₁)
+  in o3-step-1 inv-s₁
 o3-preserve {instr = private-input g} {i = i} inv
             (r-private-input-inactive _) refl =
-  o3-inv-coerce-idx (sym (+-1-r i)) (o3-frame-push-mem inv)
+  o3-step-1 inv
 o3-preserve {s = s} {instr = private-input g} {i = i} inv
             (r-private-input-active {s₁ = s₁} _ s₁-eq) refl =
   let mem-eq : Preprocessed.memory s₁ ≡ Preprocessed.memory s
       mem-eq = consume-priv-mem-eq s s₁-eq
       inv-s₁ = o3-frame-no-grow mem-eq inv
-  in o3-inv-coerce-idx (sym (+-1-r i)) (o3-frame-push-mem inv-s₁)
+  in o3-step-1 inv-s₁
 o3-preserve {instr = transient-hash xs} {i = i} inv (r-transient-hash _) refl =
-  o3-inv-coerce-idx (sym (+-1-r i)) (o3-frame-push-mem inv)
+  o3-step-1 inv
 
 -- Δmem = 2 cases.
 o3-preserve {instr = ec-add ax ay bx by} {i = i} inv (r-ec-add _ _ _ _ _) refl =
-  o3-inv-coerce-idx (sym (+-2-r i)) (o3-frame-push-mem-2 inv)
+  o3-step-2 inv
 o3-preserve {instr = ec-mul ax ay sc} {i = i} inv (r-ec-mul _ _ _ _) refl =
-  o3-inv-coerce-idx (sym (+-2-r i)) (o3-frame-push-mem-2 inv)
+  o3-step-2 inv
 o3-preserve {instr = ec-mul-generator sc} {i = i} inv (r-ec-mul-generator _ _) refl =
-  o3-inv-coerce-idx (sym (+-2-r i)) (o3-frame-push-mem-2 inv)
+  o3-step-2 inv
 o3-preserve {instr = hash-to-curve xs} {i = i} inv (r-hash-to-curve _ _) refl =
-  o3-inv-coerce-idx (sym (+-2-r i)) (o3-frame-push-mem-2 inv)
+  o3-step-2 inv
 o3-preserve {instr = persistent-hash a xs} {i = i} inv (r-persistent-hash _ _) refl =
-  o3-inv-coerce-idx (sym (+-2-r i)) (o3-frame-push-mem-2 inv)
+  o3-step-2 inv
 
 -- div-mod-power-of-two v n: 2 records.  divisor at i (fits in FR-BITS ∸ n);
 -- modulus at suc i (fits in n).  Justified by the bit-arithmetic axioms.

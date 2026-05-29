@@ -91,11 +91,39 @@ private
   lookup-new-snd []       x y = refl
   lookup-new-snd (z ∷ zs) x y = lookup-new-snd zs x y
 
+  -- Extend a pre-state lookup across both pushed cells of a Δmem=2
+  -- instruction (the iterated `(mem ++ x ∷ []) ++ y ∷ []` shape).  Used by
+  -- the cryptographic cluster (ec-add, ec-mul, ec-mul-generator, …).
+  lookup-extend2 : ∀ (mem : List Fr) x y i {v}
+    → mem-lookup mem i ≡ just v
+    → mem-lookup ((mem ++ (x ∷ [])) ++ (y ∷ [])) i ≡ just v
+  lookup-extend2 mem x y i e =
+    lookup-extends (mem ++ (x ∷ [])) (y ∷ []) i (lookup-extends mem (x ∷ []) i e)
+
   lookup-uniq : ∀ (mem : List Fr) (i : Index) {v w}
     → mem-lookup mem i ≡ just v
     → mem-lookup mem i ≡ just w
     → v ≡ w
   lookup-uniq _ _ p q = just-injective (trans (sym p) q)
+
+  -- A pre-state lookup, extended to the post-state memory, matched
+  -- against a clause-supplied lookup at the same index.  This is the
+  -- idiom every `*-bwd` lemma uses to identify the operational operand
+  -- value `v` with the witness value `w`.
+  extend-uniq : ∀ (mem suffix : List Fr) (i : Index) {v w}
+    → mem-lookup mem i ≡ just v
+    → mem-lookup (mem ++ suffix) i ≡ just w
+    → v ≡ w
+  extend-uniq mem suffix i la la' =
+    lookup-uniq (mem ++ suffix) i (lookup-extends mem suffix i la) la'
+
+  -- The freshly-pushed cell, matched against a clause-supplied lookup at
+  -- the new index `length mem`.  Identifies the pushed value `v` with
+  -- the witness's output value `w`.
+  new-uniq : ∀ (mem : List Fr) v {w}
+    → mem-lookup (mem ++ (v ∷ [])) (length mem) ≡ just w
+    → v ≡ w
+  new-uniq mem v lout = lookup-uniq (mem ++ (v ∷ [])) (length mem) (lookup-new mem v) lout
 
   -- Multi-index analogue of `lookup-extends`.  Used by the cryptographic
   -- cluster (transient-hash, persistent-hash, hash-to-curve) whose
@@ -319,13 +347,9 @@ add-bwd : ∀ {pre s a b av bv v hc} {rand : Maybe Fr}
   → (v ≡ av +ᶠ bv) × R-instr pre s (add a b) (push-mem s v)
 add-bwd {pre = pre} {s = s} {a = a} {b = b} {av = av} {bv = bv} {v = v}
         la lb ((av' , bv' , ov' , la' , lb' , lout , eq) , _) =
-  let mem'   = Preprocessed.memory s ++ (v ∷ [])
-      la-ext = lookup-extends (Preprocessed.memory s) (v ∷ []) a la
-      lb-ext = lookup-extends (Preprocessed.memory s) (v ∷ []) b lb
-      av≡av' = lookup-uniq mem' a la-ext la'
-      bv≡bv' = lookup-uniq mem' b lb-ext lb'
-      v≡ov'  = lookup-uniq mem' (length (Preprocessed.memory s))
-                            (lookup-new (Preprocessed.memory s) v) lout
+  let av≡av' = extend-uniq (Preprocessed.memory s) (v ∷ []) a la la'
+      bv≡bv' = extend-uniq (Preprocessed.memory s) (v ∷ []) b lb lb'
+      v≡ov'  = new-uniq (Preprocessed.memory s) v lout
       v≡sum  : v ≡ av +ᶠ bv
       v≡sum  = trans v≡ov' (trans eq (cong₂ _+ᶠ_ (sym av≡av') (sym bv≡bv')))
   in v≡sum
@@ -361,12 +385,10 @@ copy-bwd : ∀ {pre s v vv w hc} {rand : Maybe Fr}
 copy-bwd {pre = pre} {s = s} {v = v} {vv = vv} {w = w}
          la ((vv' , ov , la' , lout , eq) , _) =
   let mem    = Preprocessed.memory s
-      mem'   = mem ++ (w ∷ [])
-      la-ext = lookup-extends mem (w ∷ []) v la
       vv≡vv' : vv ≡ vv'
-      vv≡vv' = lookup-uniq mem' v la-ext la'
+      vv≡vv' = extend-uniq mem (w ∷ []) v la la'
       w≡ov   : w ≡ ov
-      w≡ov   = lookup-uniq mem' (length mem) (lookup-new mem w) lout
+      w≡ov   = new-uniq mem w lout
       w≡vv   : w ≡ vv
       w≡vv   = trans w≡ov (trans eq (sym vv≡vv'))
   in w≡vv
@@ -399,10 +421,8 @@ load-imm-bwd : ∀ {pre s k w hc} {rand : Maybe Fr}
   → (w ≡ k) × R-instr pre s (load-imm k) (push-mem s w)
 load-imm-bwd {pre = pre} {s = s} {k = k} {w = w}
              ((ov , lout , eq) , _) =
-  let mem    = Preprocessed.memory s
-      mem'   = mem ++ (w ∷ [])
-      w≡ov   : w ≡ ov
-      w≡ov   = lookup-uniq mem' (length mem) (lookup-new mem w) lout
+  let w≡ov   : w ≡ ov
+      w≡ov   = new-uniq (Preprocessed.memory s) w lout
       w≡k    : w ≡ k
       w≡k    = trans w≡ov eq
   in w≡k
@@ -499,13 +519,9 @@ mul-bwd : ∀ {pre s a b av bv v hc} {rand : Maybe Fr}
   → (v ≡ av *ᶠ bv) × R-instr pre s (mul a b) (push-mem s v)
 mul-bwd {pre = pre} {s = s} {a = a} {b = b} {av = av} {bv = bv} {v = v}
         la lb ((av' , bv' , ov' , la' , lb' , lout , eq) , _) =
-  let mem'   = Preprocessed.memory s ++ (v ∷ [])
-      la-ext = lookup-extends (Preprocessed.memory s) (v ∷ []) a la
-      lb-ext = lookup-extends (Preprocessed.memory s) (v ∷ []) b lb
-      av≡av' = lookup-uniq mem' a la-ext la'
-      bv≡bv' = lookup-uniq mem' b lb-ext lb'
-      v≡ov'  = lookup-uniq mem' (length (Preprocessed.memory s))
-                            (lookup-new (Preprocessed.memory s) v) lout
+  let av≡av' = extend-uniq (Preprocessed.memory s) (v ∷ []) a la la'
+      bv≡bv' = extend-uniq (Preprocessed.memory s) (v ∷ []) b lb lb'
+      v≡ov'  = new-uniq (Preprocessed.memory s) v lout
       v≡prod : v ≡ av *ᶠ bv
       v≡prod = trans v≡ov' (trans eq (cong₂ _*ᶠ_ (sym av≡av') (sym bv≡bv')))
   in v≡prod
@@ -533,13 +549,10 @@ neg-bwd : ∀ {pre s a av v hc} {rand : Maybe Fr}
   → (v ≡ (-ᶠ av)) × R-instr pre s (neg a) (push-mem s v)
 neg-bwd {pre = pre} {s = s} {a = a} {av = av} {v = v}
         la ((av' , ov' , la' , lout , eq) , _) =
-  let mem'   = Preprocessed.memory s ++ (v ∷ [])
-      la-ext = lookup-extends (Preprocessed.memory s) (v ∷ []) a la
-      av≡av' : av ≡ av'
-      av≡av' = lookup-uniq mem' a la-ext la'
+  let av≡av' : av ≡ av'
+      av≡av' = extend-uniq (Preprocessed.memory s) (v ∷ []) a la la'
       v≡ov'  : v ≡ ov'
-      v≡ov'  = lookup-uniq mem' (length (Preprocessed.memory s))
-                            (lookup-new (Preprocessed.memory s) v) lout
+      v≡ov'  = new-uniq (Preprocessed.memory s) v lout
       v≡neg  : v ≡ (-ᶠ av)
       v≡neg  = trans v≡ov' (trans eq (cong -ᶠ_ (sym av≡av')))
   in v≡neg
@@ -577,16 +590,12 @@ test-eq-bwd : ∀ {pre s a b av bv v hc} {rand : Maybe Fr}
   × R-instr pre s (test-eq a b) (push-mem s v)
 test-eq-bwd {pre = pre} {s = s} {a = a} {b = b} {av = av} {bv = bv} {v = v}
             la lb ((av' , bv' , ov' , la' , lb' , lout , eq) , _) =
-  let mem'   = Preprocessed.memory s ++ (v ∷ [])
-      la-ext = lookup-extends (Preprocessed.memory s) (v ∷ []) a la
-      lb-ext = lookup-extends (Preprocessed.memory s) (v ∷ []) b lb
-      av≡av' : av ≡ av'
-      av≡av' = lookup-uniq mem' a la-ext la'
+  let av≡av' : av ≡ av'
+      av≡av' = extend-uniq (Preprocessed.memory s) (v ∷ []) a la la'
       bv≡bv' : bv ≡ bv'
-      bv≡bv' = lookup-uniq mem' b lb-ext lb'
+      bv≡bv' = extend-uniq (Preprocessed.memory s) (v ∷ []) b lb lb'
       v≡ov'  : v ≡ ov'
-      v≡ov'  = lookup-uniq mem' (length (Preprocessed.memory s))
-                            (lookup-new (Preprocessed.memory s) v) lout
+      v≡ov'  = new-uniq (Preprocessed.memory s) v lout
       v≡teq  : v ≡ from-bool (av ≡ᶠ? bv)
       v≡teq  = trans v≡ov' (trans eq (cong₂ (λ x y → from-bool (x ≡ᶠ? y))
                                               (sym av≡av') (sym bv≡bv')))
@@ -640,10 +649,7 @@ constrain-to-boolean-fwd : ∀ {pre s s' v hc} {rand : Maybe Fr}
       (single-instr-clauses hc (length (Preprocessed.memory s)) (constrain-to-boolean v))
       (mk-witness (Preprocessed.memory s') (Preprocessed.pis s') rand)
 constrain-to-boolean-fwd {s = s} {v = v} (r-constrain-to-boolean la-bind) =
-  let info  = extract-bit-lookup (Preprocessed.memory s) v la-bind
-      vv    = proj₁ info
-      lvv   = proj₁ (proj₂ info)
-      to-vv = proj₂ (proj₂ info)
+  let (vv , lvv , to-vv) = extract-bit-lookup (Preprocessed.memory s) v la-bind
   in (vv , lvv , to-bool→is-bit to-vv) , tt
 
 -- Backward: the clause's `is-bit vv` gives us `vv ∈ {0, 1}`, which
@@ -708,10 +714,7 @@ not-fwd : ∀ {pre s s' a hc} {rand : Maybe Fr}
       (mk-witness (Preprocessed.memory s') (Preprocessed.pis s') rand)
 not-fwd {s = s} {a = a} (r-not {b = b} la-bind) =
   let mem    = Preprocessed.memory s
-      info   = extract-bit-lookup mem a la-bind
-      av     = proj₁ info
-      lav    = proj₁ (proj₂ info)
-      to-av  = proj₂ (proj₂ info)
+      (av , lav , to-av) = extract-bit-lookup mem a la-bind
       out-val = from-bool (Bool.not b)
   in ( av , out-val
      , lookup-extends mem (out-val ∷ []) a lav
@@ -769,10 +772,8 @@ not-bwd : ∀ {pre s a av v hc} {rand : Maybe Fr}
 not-bwd {pre = pre} {s = s} {a = a} {av = av} {v = v}
         la is-bit-av ((av' , ov , la' , lout , ov-eq) , _) =
   let mem    = Preprocessed.memory s
-      mem'   = mem ++ (v ∷ [])
-      la-ext = lookup-extends mem (v ∷ []) a la
-      av≡av' = lookup-uniq mem' a la-ext la'
-      v≡ov   = lookup-uniq mem' (length mem) (lookup-new mem v) lout
+      av≡av' = extend-uniq mem (v ∷ []) a la la'
+      v≡ov   = new-uniq mem v lout
       v≡target : v ≡ from-bool (av ≡ᶠ? 0ᶠ)
       v≡target = trans v≡ov
                   (trans ov-eq (cong (λ z → from-bool (z ≡ᶠ? 0ᶠ))
@@ -837,10 +838,7 @@ cond-select-fwd {s = s} {b = b} {a = a} {c = c}
                                 lb-bind la lc) =
   let mem     = Preprocessed.memory s
       out-val = if sel then av-spec else cv-spec
-      info    = extract-bit-lookup mem b lb-bind
-      bv      = proj₁ info
-      lbv-pre = proj₁ (proj₂ info)
-      to-bv   = proj₂ (proj₂ info)
+      (bv , lbv-pre , to-bv) = extract-bit-lookup mem b lb-bind
   in ( bv , av-spec , cv-spec , out-val
      , lookup-extends mem (out-val ∷ []) b lbv-pre
      , lookup-extends mem (out-val ∷ []) a la
@@ -872,10 +870,9 @@ cond-select-bwd {pre = pre} {s = s} {b = b} {a = a} {c = c}
                                        , inj₁ bv'≡0 , eq) , _) =
   -- Case bv' ≡ 0ᶠ ⇒ sel = false ⇒ output = cv.
   let mem    = Preprocessed.memory s
-      mem'   = mem ++ (v ∷ [])
-      bv≡bv' = lookup-uniq mem' b (lookup-extends mem (v ∷ []) b lb) lb'
-      cv≡cv' = lookup-uniq mem' c (lookup-extends mem (v ∷ []) c lc) lc'
-      v≡ov   = lookup-uniq mem' (length mem) (lookup-new mem v) lout
+      bv≡bv' = extend-uniq mem (v ∷ []) b lb lb'
+      cv≡cv' = extend-uniq mem (v ∷ []) c lc lc'
+      v≡ov   = new-uniq mem v lout
       bv≡0   = trans bv≡bv' bv'≡0
       ov≡cv' = trans (subst (λ z → ov ≡ (z *ᶠ av') +ᶠ ((1ᶠ +ᶠ (-ᶠ z)) *ᶠ cv'))
                              bv'≡0 eq)
@@ -897,10 +894,9 @@ cond-select-bwd {pre = pre} {s = s} {b = b} {a = a} {c = c}
                                        , inj₂ bv'≡1 , eq) , _) =
   -- Case bv' ≡ 1ᶠ ⇒ sel = true ⇒ output = av.
   let mem    = Preprocessed.memory s
-      mem'   = mem ++ (v ∷ [])
-      bv≡bv' = lookup-uniq mem' b (lookup-extends mem (v ∷ []) b lb) lb'
-      av≡av' = lookup-uniq mem' a (lookup-extends mem (v ∷ []) a la) la'
-      v≡ov   = lookup-uniq mem' (length mem) (lookup-new mem v) lout
+      bv≡bv' = extend-uniq mem (v ∷ []) b lb lb'
+      av≡av' = extend-uniq mem (v ∷ []) a la la'
+      v≡ov   = new-uniq mem v lout
       bv≡1   = trans bv≡bv' bv'≡1
       ov≡av' = trans (subst (λ z → ov ≡ (z *ᶠ av') +ᶠ ((1ᶠ +ᶠ (-ᶠ z)) *ᶠ cv'))
                              bv'≡1 eq)
@@ -1025,15 +1021,6 @@ public-input-nothing-bwd cp = r-public-input-active refl cp
 -- characterize `consume-pub-out` to compute the post-state's memory.
 ------------------------------------------------------------------------
 
--- Helper: from `eval-guard mem (just g) ≡ just b` extract the underlying
--- field value bound to `g` and the `to-bool` evidence.
-private
-  extract-guard-just : ∀ (mem : List Fr) g {b}
-    → eval-guard mem (just g) ≡ just b
-    → ∃-syntax (λ gv →
-        (mem-lookup mem g ≡ just gv) × (to-bool gv ≡ just b))
-  extract-guard-just mem g eq = extract-bit-lookup mem g eq
-
 public-input-just-fwd : ∀ {pre s s' g hc} {rand : Maybe Fr}
   → R-instr pre s (public-input (just g)) s'
   → satisfies-clauses
@@ -1043,9 +1030,7 @@ public-input-just-fwd {s = s} {g = g} {hc = hc}
                       (r-public-input-inactive eg) =
   -- Inactive: post-state memory = s.memory ++ [0ᶠ]; out value is 0ᶠ.
   let mem  = Preprocessed.memory s
-      info = extract-guard-just mem g eg
-      gv   = proj₁ info
-      lg   = proj₁ (proj₂ info)
+      (gv , lg , _) = extract-bit-lookup mem g eg
   in ( 0ᶠ , gv
      , lookup-new mem 0ᶠ
      , lookup-extends mem (0ᶠ ∷ []) g lg
@@ -1057,10 +1042,7 @@ public-input-just-fwd {s = s} {g = g} {hc = hc} {rand = rand}
   let mem    = Preprocessed.memory s
       mem-eq : Preprocessed.memory s₁ ≡ mem
       mem-eq = consume-pub-out-mem s cp
-      info   = extract-guard-just mem g eg
-      gv     = proj₁ info
-      lg     = proj₁ (proj₂ info)
-      to-gv  = proj₂ (proj₂ info)
+      (gv , lg , to-gv) = extract-bit-lookup mem g eg
       gv≡1   : gv ≡ 1ᶠ
       gv≡1   = to-bool-true to-gv
       -- Rewrite `push-mem s₁ v` so its memory shape is `mem ++ (v ∷ [])`.
@@ -1122,9 +1104,7 @@ private-input-just-fwd : ∀ {pre s s' g hc} {rand : Maybe Fr}
 private-input-just-fwd {s = s} {g = g}
                        (r-private-input-inactive eg) =
   let mem  = Preprocessed.memory s
-      info = extract-guard-just mem g eg
-      gv   = proj₁ info
-      lg   = proj₁ (proj₂ info)
+      (gv , lg , _) = extract-bit-lookup mem g eg
   in ( 0ᶠ , gv
      , lookup-new mem 0ᶠ
      , lookup-extends mem (0ᶠ ∷ []) g lg
@@ -1135,10 +1115,7 @@ private-input-just-fwd {s = s} {g = g} {hc = hc} {rand = rand}
   let mem    = Preprocessed.memory s
       mem-eq : Preprocessed.memory s₁ ≡ mem
       mem-eq = consume-priv-mem s cp
-      info   = extract-guard-just mem g eg
-      gv     = proj₁ info
-      lg     = proj₁ (proj₂ info)
-      to-gv  = proj₂ (proj₂ info)
+      (gv , lg , to-gv) = extract-bit-lookup mem g eg
       gv≡1   : gv ≡ 1ᶠ
       gv≡1   = to-bool-true to-gv
       mem'   = mem ++ (v ∷ [])
@@ -1186,10 +1163,7 @@ assert-fwd : ∀ {pre s s' c hc} {rand : Maybe Fr}
       (mk-witness (Preprocessed.memory s') (Preprocessed.pis s') rand)
 assert-fwd {s = s} {c = c} (r-assert la-bind) =
   let mem    = Preprocessed.memory s
-      info   = extract-bit-lookup mem c la-bind
-      vv     = proj₁ info
-      lvv    = proj₁ (proj₂ info)
-      to-vv  = proj₂ (proj₂ info)
+      (vv , lvv , to-vv) = extract-bit-lookup mem c la-bind
       vv≡1   : vv ≡ 1ᶠ
       vv≡1   = to-bool-true to-vv
       vv≢0   : ¬ (vv ≡ 0ᶠ)
@@ -1429,12 +1403,9 @@ reconstitute-field-bwd {pre = pre} {s = s} {d = d} {m = m} {bits = bits}
   ld lm in-field
   ((dv' , mv' , ov , ld' , lm' , lout , fits-dv , fits-mv , ov-eq) , _) =
   let mem    = Preprocessed.memory s
-      mem'   = mem ++ (v ∷ [])
-      ld-ext = lookup-extends mem (v ∷ []) d ld
-      lm-ext = lookup-extends mem (v ∷ []) m lm
-      dv≡dv' = lookup-uniq mem' d ld-ext ld'
-      mv≡mv' = lookup-uniq mem' m lm-ext lm'
-      v≡ov   = lookup-uniq mem' (length mem) (lookup-new mem v) lout
+      dv≡dv' = extend-uniq mem (v ∷ []) d ld ld'
+      mv≡mv' = extend-uniq mem (v ∷ []) m lm lm'
+      v≡ov   = new-uniq mem v lout
       -- Canonical reconstitution.
       canon  = from-le-bits
                  (take bits (to-le-bits mv) ++ take (FR-BITS ∸ bits) (to-le-bits dv))
@@ -1542,12 +1513,9 @@ less-than-bwd {pre = pre} {s = s} {a = a} {b = b} {bits = bits}
   la lb fits-av fits-bv
   ((av' , bv' , ov , la' , lb' , lout , _ , _ , ov-eq) , _) =
   let mem    = Preprocessed.memory s
-      mem'   = mem ++ (v ∷ [])
-      la-ext = lookup-extends mem (v ∷ []) a la
-      lb-ext = lookup-extends mem (v ∷ []) b lb
-      av≡av' = lookup-uniq mem' a la-ext la'
-      bv≡bv' = lookup-uniq mem' b lb-ext lb'
-      v≡ov   = lookup-uniq mem' (length mem) (lookup-new mem v) lout
+      av≡av' = extend-uniq mem (v ∷ []) a la la'
+      bv≡bv' = extend-uniq mem (v ∷ []) b lb lb'
+      v≡ov   = new-uniq mem v lout
       -- Operational output value (the canonical, unpadded one).
       op-out = from-bool (bits-lt (take bits (to-le-bits av))
                                    (take bits (to-le-bits bv)))
@@ -1616,10 +1584,9 @@ transient-hash-bwd : ∀ {pre s inputs vs v hc} {rand : Maybe Fr}
 transient-hash-bwd {pre = pre} {s = s} {inputs = inputs} {vs = vs} {v = v}
   lvs ((vs' , ov , lvs' , lout , ov-eq) , _) =
   let mem      = Preprocessed.memory s
-      mem'     = mem ++ (v ∷ [])
       lvs-ext  = mem-lookups-extends mem (v ∷ []) inputs lvs
       vs≡vs'   = just-injective (trans (sym lvs-ext) lvs')
-      v≡ov     = lookup-uniq mem' (length mem) (lookup-new mem v) lout
+      v≡ov     = new-uniq mem v lout
       v≡hash   : v ≡ transient-hash-fn vs
       v≡hash   = trans v≡ov (trans ov-eq (cong transient-hash-fn (sym vs≡vs')))
   in v≡hash , r-transient-hash lvs
@@ -1761,16 +1728,15 @@ ec-add-fwd {s = s} {a-x = a-x} {a-y = a-y} {b-x = b-x} {b-y = b-y}
             {cx = cx} {cy = cy} lax lay lbx lby add-eq) =
   let mem    = Preprocessed.memory s
       assoc  = push-mem2-assoc mem cx cy
-      pre-ax = mem ++ (cx ∷ [])
   in subst (λ m → satisfies-clauses
              (single-instr-clauses hc (length mem) (ec-add a-x a-y b-x b-y))
              (mk-witness m (Preprocessed.pis s) rand))
            (sym assoc)
            (( ax , ay , bx , by , cx , cy
-            , lookup-extends pre-ax (cy ∷ []) a-x (lookup-extends mem (cx ∷ []) a-x lax)
-            , lookup-extends pre-ax (cy ∷ []) a-y (lookup-extends mem (cx ∷ []) a-y lay)
-            , lookup-extends pre-ax (cy ∷ []) b-x (lookup-extends mem (cx ∷ []) b-x lbx)
-            , lookup-extends pre-ax (cy ∷ []) b-y (lookup-extends mem (cx ∷ []) b-y lby)
+            , lookup-extend2 mem cx cy a-x lax
+            , lookup-extend2 mem cx cy a-y lay
+            , lookup-extend2 mem cx cy b-x lbx
+            , lookup-extend2 mem cx cy b-y lby
             , lookup-new-fst mem cx cy
             , lookup-new-snd mem cx cy
             , add-eq
@@ -1794,14 +1760,11 @@ ec-add-bwd {pre = pre} {s = s} {a-x = a-x} {a-y = a-y} {b-x = b-x} {b-y = b-y}
   ((ax' , ay' , bx' , by' , cx , cy
     , lax' , lay' , lbx' , lby' , lcx , lcy , add-eq) , _) =
   let mem    = Preprocessed.memory s
-      pre-ax = mem ++ (x ∷ [])
-      mem'   = pre-ax ++ (y ∷ [])
-      ext    : ∀ i {v} → mem-lookup mem i ≡ just v → mem-lookup mem' i ≡ just v
-      ext i e = lookup-extends pre-ax (y ∷ []) i (lookup-extends mem (x ∷ []) i e)
-      ax≡ax' = lookup-uniq mem' a-x (ext a-x lax) lax'
-      ay≡ay' = lookup-uniq mem' a-y (ext a-y lay) lay'
-      bx≡bx' = lookup-uniq mem' b-x (ext b-x lbx) lbx'
-      by≡by' = lookup-uniq mem' b-y (ext b-y lby) lby'
+      mem'   = (mem ++ (x ∷ [])) ++ (y ∷ [])
+      ax≡ax' = lookup-uniq mem' a-x (lookup-extend2 mem x y a-x lax) lax'
+      ay≡ay' = lookup-uniq mem' a-y (lookup-extend2 mem x y a-y lay) lay'
+      bx≡bx' = lookup-uniq mem' b-x (lookup-extend2 mem x y b-x lbx) lbx'
+      by≡by' = lookup-uniq mem' b-y (lookup-extend2 mem x y b-y lby) lby'
       x≡cx   = just-injective (trans (sym (lookup-new-fst mem x y)) lcx)
       y≡cy   = just-injective (trans (sym (lookup-new-snd mem x y)) lcy)
       add-eq' : ec-add-pts ax ay bx by ≡ just (x , y)
@@ -1827,15 +1790,14 @@ ec-mul-fwd {s = s} {a-x = a-x} {a-y = a-y} {scalar = scalar}
             lax lay lsc mul-eq) =
   let mem    = Preprocessed.memory s
       assoc  = push-mem2-assoc mem cx cy
-      pre-ax = mem ++ (cx ∷ [])
   in subst (λ m → satisfies-clauses
              (single-instr-clauses hc (length mem) (ec-mul a-x a-y scalar))
              (mk-witness m (Preprocessed.pis s) rand))
            (sym assoc)
            (( ax , ay , sc , cx , cy
-            , lookup-extends pre-ax (cy ∷ []) a-x   (lookup-extends mem (cx ∷ []) a-x lax)
-            , lookup-extends pre-ax (cy ∷ []) a-y   (lookup-extends mem (cx ∷ []) a-y lay)
-            , lookup-extends pre-ax (cy ∷ []) scalar (lookup-extends mem (cx ∷ []) scalar lsc)
+            , lookup-extend2 mem cx cy a-x lax
+            , lookup-extend2 mem cx cy a-y lay
+            , lookup-extend2 mem cx cy scalar lsc
             , lookup-new-fst mem cx cy
             , lookup-new-snd mem cx cy
             , mul-eq
@@ -1858,13 +1820,10 @@ ec-mul-bwd {pre = pre} {s = s} {a-x = a-x} {a-y = a-y} {scalar = scalar}
   ((ax' , ay' , sc' , cx , cy
     , lax' , lay' , lsc' , lcx , lcy , mul-eq) , _) =
   let mem    = Preprocessed.memory s
-      pre-ax = mem ++ (x ∷ [])
-      mem'   = pre-ax ++ (y ∷ [])
-      ext    : ∀ i {v} → mem-lookup mem i ≡ just v → mem-lookup mem' i ≡ just v
-      ext i e = lookup-extends pre-ax (y ∷ []) i (lookup-extends mem (x ∷ []) i e)
-      ax≡ax' = lookup-uniq mem' a-x   (ext a-x   lax) lax'
-      ay≡ay' = lookup-uniq mem' a-y   (ext a-y   lay) lay'
-      sc≡sc' = lookup-uniq mem' scalar (ext scalar lsc) lsc'
+      mem'   = (mem ++ (x ∷ [])) ++ (y ∷ [])
+      ax≡ax' = lookup-uniq mem' a-x   (lookup-extend2 mem x y a-x   lax) lax'
+      ay≡ay' = lookup-uniq mem' a-y   (lookup-extend2 mem x y a-y   lay) lay'
+      sc≡sc' = lookup-uniq mem' scalar (lookup-extend2 mem x y scalar lsc) lsc'
       x≡cx   = just-injective (trans (sym (lookup-new-fst mem x y)) lcx)
       y≡cy   = just-injective (trans (sym (lookup-new-snd mem x y)) lcy)
       mul-eq' : ec-mul-pt ax ay sc ≡ just (x , y)
@@ -1891,13 +1850,12 @@ ec-mul-generator-fwd {s = s} {scalar = scalar} {hc = hc} {rand = rand}
   (r-ec-mul-generator {sc = sc} {cx = cx} {cy = cy} lsc gen-eq) =
   let mem    = Preprocessed.memory s
       assoc  = push-mem2-assoc mem cx cy
-      pre-ax = mem ++ (cx ∷ [])
   in subst (λ m → satisfies-clauses
              (single-instr-clauses hc (length mem) (ec-mul-generator scalar))
              (mk-witness m (Preprocessed.pis s) rand))
            (sym assoc)
            (( sc , cx , cy
-            , lookup-extends pre-ax (cy ∷ []) scalar (lookup-extends mem (cx ∷ []) scalar lsc)
+            , lookup-extend2 mem cx cy scalar lsc
             , lookup-new-fst mem cx cy
             , lookup-new-snd mem cx cy
             , gen-eq
@@ -1916,10 +1874,8 @@ ec-mul-generator-bwd {pre = pre} {s = s} {scalar = scalar}
                      {sc = sc} {x = x} {y = y}
   lsc ((sc' , cx , cy , lsc' , lcx , lcy , gen-eq) , _) =
   let mem    = Preprocessed.memory s
-      pre-ax = mem ++ (x ∷ [])
-      mem'   = pre-ax ++ (y ∷ [])
-      lsc-ext = lookup-extends pre-ax (y ∷ []) scalar (lookup-extends mem (x ∷ []) scalar lsc)
-      sc≡sc' = lookup-uniq mem' scalar lsc-ext lsc'
+      mem'   = (mem ++ (x ∷ [])) ++ (y ∷ [])
+      sc≡sc' = lookup-uniq mem' scalar (lookup-extend2 mem x y scalar lsc) lsc'
       x≡cx   = just-injective (trans (sym (lookup-new-fst mem x y)) lcx)
       y≡cy   = just-injective (trans (sym (lookup-new-snd mem x y)) lcy)
       gen-eq' : ec-mul-gen sc ≡ (x , y)
