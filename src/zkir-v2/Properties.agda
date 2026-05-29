@@ -7,15 +7,17 @@ open import zkir-v2.Syntax ⋯
 open import zkir-v2.Semantics ⋯
 
 open import Data.Bool    using (Bool; true; false; if_then_else_; _∧_)
-open import Data.List    using (List; []; _∷_; length)
-open import Data.List.Properties using (length-++-≤ˡ)
+open import Data.List    using (List; []; _∷_; _++_; length)
+open import Data.List.Properties using (length-++-≤ˡ; length-++)
+open import Data.List.Relation.Unary.All using (All) renaming ([] to ⟨⟩; _∷_ to _◂_)
 open import Data.Maybe   using (Maybe; nothing; just; _>>=_)
-open import Data.Nat     using (ℕ; _≤_; _≡ᵇ_)
-open import Data.Nat.Properties  using (≤-trans; ≤-reflexive)
+open import Data.Nat     using (ℕ; zero; suc; _≤_; _<_; _+_; _≡ᵇ_; z≤n; s≤s)
+open import Data.Nat.Properties
+  using (≤-refl; ≤-trans; ≤-reflexive; m∸n≤m; +-comm; +-assoc; +-monoʳ-≤; +-identityʳ)
 open import Data.Product using (_×_; _,_; ∃; proj₂)
 open import Data.Maybe.Properties using (just-injective)
 open import Relation.Binary.PropositionalEquality
-  using (_≡_; refl; sym; cong; subst)
+  using (_≡_; refl; sym; trans; cong; subst)
 -- P5 (circuit faithfulness) is now fully discharged in `CircuitProof`;
 -- we re-export it here (where the spec's §6.2 postulate used to live).
 open import zkir-v2.Circuit ⋯      using (circuit; satisfies)
@@ -665,3 +667,326 @@ R→preprocess src pre s (s₀ , init-eq , ris , tc , co)
 --     → preprocess-shaped src pre s
 --     → R src pre s ⇔ satisfies (circuit src) (witness-of s pre)
 ------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+-- 6. Well-formedness preservation (Property P4, spec §6.1)
+--
+-- The spec's P4 makes three claims about every reachable intermediate
+-- state of a preprocess run.  We mechanise all three over the relational
+-- trace `R-instrs` (equivalently `preprocess`, via section 4's bridge):
+--
+--   (a) in-bounds.    A successful step references only memory indices
+--                     `< |memory|` of its pre-state.  This is the
+--                     contrapositive of the spec's "… < |Σᵢ.M| — or the
+--                     transition fails": a step that does *not* fail
+--                     (i.e. `R-instr` relates it) has all its operand
+--                     indices in range.  (`R-instr→in-bounds`)
+--   (b) PI bound.     `pub-in-idx` never exceeds the number of
+--                     `declare-pub-input`s executed so far.
+--                     (`pub-idx-trace`; corollary `preprocess-pub-in-idx-bound`)
+--   (c) output count. `|outputs|` equals the number of `output`s executed
+--                     so far — the cardinality of the spec's bijection
+--                     between `Σ.ω` and the executed `Output`s.
+--                     (`out-trace`; corollary `preprocess-output-count`)
+--
+-- None of the three needs the §3.4 well-formedness hypotheses: they hold
+-- for every trace the semantics admits.  (Well-formedness is what makes
+-- such traces *exist* for honest producers; the invariants themselves are
+-- structural.)  The top-level corollaries specialise (b)/(c) to a full
+-- `preprocess` run, where the initial `pub-in-idx`/`outputs` are `0`/`[]`.
+------------------------------------------------------------------------
+
+-- A successful memory lookup proves its index is in range.
+mem-lookup-< : ∀ (mem : List Fr) idx {v}
+  → mem-lookup mem idx ≡ just v → idx < length mem
+mem-lookup-< (x ∷ _)  zero    _  = s≤s z≤n
+mem-lookup-< (_ ∷ xs) (suc n) eq = s≤s (mem-lookup-< xs n eq)
+mem-lookup-< []       _       ()
+
+-- Likewise for a lookup followed by a boolean coercion.
+lookup-bool-< : ∀ (mem : List Fr) idx {b}
+  → (mem-lookup mem idx >>= to-bool) ≡ just b → idx < length mem
+lookup-bool-< mem idx eq with >>=-just (mem-lookup mem idx) eq
+... | _ , lk , _ = mem-lookup-< mem idx lk
+
+-- A successful multi-lookup proves every index is in range.
+mem-lookups-all : ∀ (mem : List Fr) is {vs}
+  → mem-lookups mem is ≡ just vs → All (_< length mem) is
+mem-lookups-all _   []       _  = ⟨⟩
+mem-lookups-all mem (i ∷ is) eq with >>=-just (mem-lookup mem i) eq
+... | _ , lk , eq₁ with >>=-just (mem-lookups mem is) eq₁
+...   | _ , lks , _ = mem-lookup-< mem i lk ◂ mem-lookups-all mem is lks
+
+-- The memory indices a guard reads (empty guard reads nothing).
+idx-of : Maybe Index → List Index
+idx-of nothing  = []
+idx-of (just i) = i ∷ []
+
+eval-guard-all : ∀ (mem : List Fr) g {b}
+  → eval-guard mem g ≡ just b → All (_< length mem) (idx-of g)
+eval-guard-all _   nothing    _  = ⟨⟩
+eval-guard-all mem (just idx) eq = lookup-bool-< mem idx eq ◂ ⟨⟩
+
+-- The memory indices an instruction reads.
+refs : Instruction → List Index
+refs (assert cond)               = cond ∷ []
+refs (cond-select bit a b)       = bit ∷ a ∷ b ∷ []
+refs (constrain-bits var _)      = var ∷ []
+refs (constrain-eq a b)          = a ∷ b ∷ []
+refs (constrain-to-boolean var)  = var ∷ []
+refs (copy var)                  = var ∷ []
+refs (declare-pub-input var)     = var ∷ []
+refs (pi-skip guard _)           = idx-of guard
+refs (ec-add a_x a_y b_x b_y)    = a_x ∷ a_y ∷ b_x ∷ b_y ∷ []
+refs (ec-mul a_x a_y scalar)     = a_x ∷ a_y ∷ scalar ∷ []
+refs (ec-mul-generator scalar)   = scalar ∷ []
+refs (hash-to-curve inputs)      = inputs
+refs (load-imm _)                = []
+refs (div-mod-power-of-two var _) = var ∷ []
+refs (reconstitute-field d m _)  = d ∷ m ∷ []
+refs (output var)                = var ∷ []
+refs (transient-hash inputs)     = inputs
+refs (persistent-hash _ inputs)  = inputs
+refs (test-eq a b)               = a ∷ b ∷ []
+refs (add a b)                   = a ∷ b ∷ []
+refs (mul a b)                   = a ∷ b ∷ []
+refs (neg a)                     = a ∷ []
+refs (not a)                     = a ∷ []
+refs (less-than a b _)           = a ∷ b ∷ []
+refs (public-input guard)        = idx-of guard
+refs (private-input guard)       = idx-of guard
+
+-- P4(a): every index a non-failing step references is `< |memory|`.
+R-instr→in-bounds : ∀ {pre s i s'} → R-instr pre s i s'
+  → All (_< length (Preprocessed.memory s)) (refs i)
+R-instr→in-bounds {s = s} (r-assert p)                = lookup-bool-< M _ p ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-cond-select ps pa pb)    = lookup-bool-< M _ ps ◂ mem-lookup-< M _ pa ◂ mem-lookup-< M _ pb ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-constrain-bits lv _)     = mem-lookup-< M _ lv ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-constrain-eq la lb _)    = mem-lookup-< M _ la ◂ mem-lookup-< M _ lb ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-constrain-to-boolean lb) = lookup-bool-< M _ lb ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-copy lv)                 = mem-lookup-< M _ lv ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-declare-pub-input lv)    = mem-lookup-< M _ lv ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-pi-skip-active {guard = guard} g _) = eval-guard-all (Preprocessed.memory s) guard g
+R-instr→in-bounds {s = s} (r-pi-skip-inactive {guard = guard} g) = eval-guard-all (Preprocessed.memory s) guard g
+R-instr→in-bounds {s = s} (r-ec-add lax lay lbx lby _) = mem-lookup-< M _ lax ◂ mem-lookup-< M _ lay ◂ mem-lookup-< M _ lbx ◂ mem-lookup-< M _ lby ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-ec-mul lax lay lsc _)    = mem-lookup-< M _ lax ◂ mem-lookup-< M _ lay ◂ mem-lookup-< M _ lsc ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-ec-mul-generator lsc _)  = mem-lookup-< M _ lsc ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-hash-to-curve lvs _)     = mem-lookups-all (Preprocessed.memory s) _ lvs
+R-instr→in-bounds r-load-imm                          = ⟨⟩
+R-instr→in-bounds {s = s} (r-div-mod-power-of-two lv) = mem-lookup-< M _ lv ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-reconstitute-field ldv lmv _) = mem-lookup-< M _ ldv ◂ mem-lookup-< M _ lmv ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-output lv)               = mem-lookup-< M _ lv ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-transient-hash lvs)      = mem-lookups-all (Preprocessed.memory s) _ lvs
+R-instr→in-bounds {s = s} (r-persistent-hash lvs _)   = mem-lookups-all (Preprocessed.memory s) _ lvs
+R-instr→in-bounds {s = s} (r-test-eq la lb)           = mem-lookup-< M _ la ◂ mem-lookup-< M _ lb ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-add la lb)               = mem-lookup-< M _ la ◂ mem-lookup-< M _ lb ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-mul la lb)               = mem-lookup-< M _ la ◂ mem-lookup-< M _ lb ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-neg la)                  = mem-lookup-< M _ la ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-not lb)                  = lookup-bool-< M _ lb ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-less-than la lb _)       = mem-lookup-< M _ la ◂ mem-lookup-< M _ lb ◂ ⟨⟩  where M = Preprocessed.memory s
+R-instr→in-bounds {s = s} (r-public-input-inactive {guard = guard} g)  = eval-guard-all (Preprocessed.memory s) guard g
+R-instr→in-bounds {s = s} (r-public-input-active {guard = guard} g _)  = eval-guard-all (Preprocessed.memory s) guard g
+R-instr→in-bounds {s = s} (r-private-input-inactive {guard = guard} g) = eval-guard-all (Preprocessed.memory s) guard g
+R-instr→in-bounds {s = s} (r-private-input-active {guard = guard} g _) = eval-guard-all (Preprocessed.memory s) guard g
+
+------------------------------------------------------------------------
+-- P4(b): public-input-index bound.
+------------------------------------------------------------------------
+
+-- consume-pub-out / consume-priv preserve pub-in-idx and outputs.
+consume-pub-out-idx : ∀ s v s₁ → consume-pub-out s ≡ just (v , s₁)
+  → Preprocessed.pub-in-idx s₁ ≡ Preprocessed.pub-in-idx s
+consume-pub-out-idx s v s₁ eq with Preprocessed.pub-out-rem s | eq
+... | []    | ()
+... | _ ∷ _ | p = sym (cong Preprocessed.pub-in-idx (cong proj₂ (just-injective p)))
+
+consume-priv-idx : ∀ s v s₁ → consume-priv s ≡ just (v , s₁)
+  → Preprocessed.pub-in-idx s₁ ≡ Preprocessed.pub-in-idx s
+consume-priv-idx s v s₁ eq with Preprocessed.priv-rem s | eq
+... | []    | ()
+... | _ ∷ _ | p = sym (cong Preprocessed.pub-in-idx (cong proj₂ (just-injective p)))
+
+consume-pub-out-out : ∀ s v s₁ → consume-pub-out s ≡ just (v , s₁)
+  → Preprocessed.outputs s₁ ≡ Preprocessed.outputs s
+consume-pub-out-out s v s₁ eq with Preprocessed.pub-out-rem s | eq
+... | []    | ()
+... | _ ∷ _ | p = sym (cong Preprocessed.outputs (cong proj₂ (just-injective p)))
+
+consume-priv-out : ∀ s v s₁ → consume-priv s ≡ just (v , s₁)
+  → Preprocessed.outputs s₁ ≡ Preprocessed.outputs s
+consume-priv-out s v s₁ eq with Preprocessed.priv-rem s | eq
+... | []    | ()
+... | _ ∷ _ | p = sym (cong Preprocessed.outputs (cong proj₂ (just-injective p)))
+
+-- Rearrangement used by both trace folds: b + (a + c) ≡ (a + b) + c.
++-rearr : ∀ a b c → b + (a + c) ≡ (a + b) + c
++-rearr a b c = trans (sym (+-assoc b a c)) (cong (_+ c) (+-comm b a))
+
+-- How much each instruction can advance pub-in-idx (only DeclarePubInput).
+declare-count : Instruction → ℕ
+declare-count (declare-pub-input _) = 1
+declare-count _                     = 0
+
+count-declares : List Instruction → ℕ
+count-declares []       = 0
+count-declares (i ∷ is) = declare-count i + count-declares is
+
+-- Per step: pub-in-idx grows by at most `declare-count i` (PiSkip may
+-- shrink it; everything but DeclarePubInput leaves it untouched).
+pub-idx-step : ∀ {pre s i s'} → R-instr pre s i s'
+  → Preprocessed.pub-in-idx s' ≤ declare-count i + Preprocessed.pub-in-idx s
+pub-idx-step (r-assert _)                 = ≤-refl
+pub-idx-step (r-cond-select _ _ _)        = ≤-refl
+pub-idx-step (r-constrain-bits _ _)       = ≤-refl
+pub-idx-step (r-constrain-eq _ _ _)       = ≤-refl
+pub-idx-step (r-constrain-to-boolean _)   = ≤-refl
+pub-idx-step (r-copy _)                   = ≤-refl
+pub-idx-step (r-declare-pub-input _)      = ≤-refl
+pub-idx-step (r-pi-skip-active _ _)       = ≤-refl
+pub-idx-step (r-pi-skip-inactive {s = s} {count = count} _) = m∸n≤m (Preprocessed.pub-in-idx s) count
+pub-idx-step (r-ec-add _ _ _ _ _)         = ≤-refl
+pub-idx-step (r-ec-mul _ _ _ _)           = ≤-refl
+pub-idx-step (r-ec-mul-generator _ _)     = ≤-refl
+pub-idx-step (r-hash-to-curve _ _)        = ≤-refl
+pub-idx-step r-load-imm                   = ≤-refl
+pub-idx-step (r-div-mod-power-of-two _)   = ≤-refl
+pub-idx-step (r-reconstitute-field _ _ _) = ≤-refl
+pub-idx-step (r-output _)                 = ≤-refl
+pub-idx-step (r-transient-hash _)         = ≤-refl
+pub-idx-step (r-persistent-hash _ _)      = ≤-refl
+pub-idx-step (r-test-eq _ _)              = ≤-refl
+pub-idx-step (r-add _ _)                  = ≤-refl
+pub-idx-step (r-mul _ _)                  = ≤-refl
+pub-idx-step (r-neg _)                    = ≤-refl
+pub-idx-step (r-not _)                    = ≤-refl
+pub-idx-step (r-less-than _ _ _)          = ≤-refl
+pub-idx-step (r-public-input-inactive _)  = ≤-refl
+pub-idx-step (r-public-input-active _ cp) = ≤-reflexive (consume-pub-out-idx _ _ _ cp)
+pub-idx-step (r-private-input-inactive _) = ≤-refl
+pub-idx-step (r-private-input-active _ cp) = ≤-reflexive (consume-priv-idx _ _ _ cp)
+
+-- Over a whole trace: pub-in-idx ≤ #DeclarePubInputs executed (+ initial).
+pub-idx-trace : ∀ {pre s₀ is s} → R-instrs pre s₀ is s
+  → Preprocessed.pub-in-idx s ≤ count-declares is + Preprocessed.pub-in-idx s₀
+pub-idx-trace r-done = ≤-refl
+pub-idx-trace {s₀ = s₀} (r-step {s₁ = s₁} {i = i} {is = is} ri ris) =
+  ≤-trans (pub-idx-trace ris)
+    (≤-trans (+-monoʳ-≤ (count-declares is) (pub-idx-step ri))
+             (≤-reflexive (+-rearr (declare-count i) (count-declares is) (Preprocessed.pub-in-idx s₀))))
+
+------------------------------------------------------------------------
+-- P4(c): output count.
+------------------------------------------------------------------------
+
+output-count : Instruction → ℕ
+output-count (output _) = 1
+output-count _          = 0
+
+count-outputs : List Instruction → ℕ
+count-outputs []       = 0
+count-outputs (i ∷ is) = output-count i + count-outputs is
+
+-- Per step: |outputs| grows by exactly `output-count i`.
+out-step : ∀ {pre s i s'} → R-instr pre s i s'
+  → length (Preprocessed.outputs s') ≡ output-count i + length (Preprocessed.outputs s)
+out-step (r-assert _)                 = refl
+out-step (r-cond-select _ _ _)        = refl
+out-step (r-constrain-bits _ _)       = refl
+out-step (r-constrain-eq _ _ _)       = refl
+out-step (r-constrain-to-boolean _)   = refl
+out-step (r-copy _)                   = refl
+out-step (r-declare-pub-input _)      = refl
+out-step (r-pi-skip-active _ _)       = refl
+out-step (r-pi-skip-inactive _)       = refl
+out-step (r-ec-add _ _ _ _ _)         = refl
+out-step (r-ec-mul _ _ _ _)           = refl
+out-step (r-ec-mul-generator _ _)     = refl
+out-step (r-hash-to-curve _ _)        = refl
+out-step r-load-imm                   = refl
+out-step (r-div-mod-power-of-two _)   = refl
+out-step (r-reconstitute-field _ _ _) = refl
+out-step (r-output {s = s} _)         = trans (length-++ (Preprocessed.outputs s))
+                                              (+-comm (length (Preprocessed.outputs s)) 1)
+out-step (r-transient-hash _)         = refl
+out-step (r-persistent-hash _ _)      = refl
+out-step (r-test-eq _ _)              = refl
+out-step (r-add _ _)                  = refl
+out-step (r-mul _ _)                  = refl
+out-step (r-neg _)                    = refl
+out-step (r-not _)                    = refl
+out-step (r-less-than _ _ _)          = refl
+out-step (r-public-input-inactive _)  = refl
+out-step (r-public-input-active _ cp) = cong length (consume-pub-out-out _ _ _ cp)
+out-step (r-private-input-inactive _) = refl
+out-step (r-private-input-active _ cp) = cong length (consume-priv-out _ _ _ cp)
+
+-- Over a whole trace: |outputs| = #Outputs executed (+ initial).
+out-trace : ∀ {pre s₀ is s} → R-instrs pre s₀ is s
+  → length (Preprocessed.outputs s) ≡ count-outputs is + length (Preprocessed.outputs s₀)
+out-trace r-done = refl
+out-trace {s₀ = s₀} (r-step {s₁ = s₁} {i = i} {is = is} ri ris) =
+  trans (out-trace ris)
+    (trans (cong (count-outputs is +_) (out-step ri))
+           (+-rearr (output-count i) (count-outputs is) (length (Preprocessed.outputs s₀))))
+
+------------------------------------------------------------------------
+-- Top-level corollaries over a full `preprocess` run.
+------------------------------------------------------------------------
+
+-- The initial state has no public inputs declared and no outputs yet.
+init-state-pub-in-idx : ∀ src pre s₀
+  → init-state src pre ≡ just s₀ → Preprocessed.pub-in-idx s₀ ≡ 0
+init-state-pub-in-idx src pre s₀ eq
+  with length (ProofPreimage.inputs pre) ≡ᵇ IrSource.num-inputs src
+     | IrSource.do-communications-commitment src
+     | ProofPreimage.comm-commitment pre
+... | false | _     | _      with eq
+...   | ()
+init-state-pub-in-idx src pre s₀ eq
+     | true  | false | _      = sym (cong Preprocessed.pub-in-idx (just-injective eq))
+init-state-pub-in-idx src pre s₀ eq
+     | true  | true  | just _ = sym (cong Preprocessed.pub-in-idx (just-injective eq))
+init-state-pub-in-idx src pre s₀ eq
+     | true  | true  | nothing with eq
+...   | ()
+
+init-state-outputs : ∀ src pre s₀
+  → init-state src pre ≡ just s₀ → Preprocessed.outputs s₀ ≡ []
+init-state-outputs src pre s₀ eq
+  with length (ProofPreimage.inputs pre) ≡ᵇ IrSource.num-inputs src
+     | IrSource.do-communications-commitment src
+     | ProofPreimage.comm-commitment pre
+... | false | _     | _      with eq
+...   | ()
+init-state-outputs src pre s₀ eq
+     | true  | false | _      = sym (cong Preprocessed.outputs (just-injective eq))
+init-state-outputs src pre s₀ eq
+     | true  | true  | just _ = sym (cong Preprocessed.outputs (just-injective eq))
+init-state-outputs src pre s₀ eq
+     | true  | true  | nothing with eq
+...   | ()
+
+-- P4(b): a successful preprocess has pub-in-idx ≤ #DeclarePubInputs.
+preprocess-pub-in-idx-bound : ∀ src pre s
+  → preprocess src pre ≡ just s
+  → Preprocessed.pub-in-idx s ≤ count-declares (IrSource.instructions src)
+preprocess-pub-in-idx-bound src pre s eq
+  with preprocess→R src pre s eq
+... | s₀ , init-eq , ris , _ , _ =
+  ≤-trans
+    (subst (λ n → Preprocessed.pub-in-idx s ≤ count-declares (IrSource.instructions src) + n)
+           (init-state-pub-in-idx src pre s₀ init-eq)
+           (pub-idx-trace ris))
+    (≤-reflexive (+-identityʳ (count-declares (IrSource.instructions src))))
+
+-- P4(c): a successful preprocess records exactly #Outputs values.
+preprocess-output-count : ∀ src pre s
+  → preprocess src pre ≡ just s
+  → length (Preprocessed.outputs s) ≡ count-outputs (IrSource.instructions src)
+preprocess-output-count src pre s eq
+  with preprocess→R src pre s eq
+... | s₀ , init-eq , ris , _ , _ =
+  trans (out-trace ris)
+    (trans (cong (count-outputs (IrSource.instructions src) +_)
+                 (cong length (init-state-outputs src pre s₀ init-eq)))
+           (+-identityʳ (count-outputs (IrSource.instructions src))))
