@@ -19,5 +19,5 @@ jobs:
       - name: Typecheck Agda
         run: |
           cd src
-          nix run .#agda -- zkir-v2/Syntax.agda
+          nix run .#agda -- zkir-v2/Main.agda
           nix run .#agda -- zkir-v3/Syntax.agda

@@ -1,7 +1,8 @@
 # ZKIR v2 — Language Specification
 
 **Status:** Working draft.
-**Source of truth:** the Rust implementation in [midnight-ledger/zkir/src/](../../midnight-ledger/zkir/src/), in particular [ir.rs](../../midnight-ledger/zkir/src/ir.rs) and [ir_vm.rs](../../midnight-ledger/zkir/src/ir_vm.rs).
+**Source of truth:** the Rust implementation in [midnight-ledger/zkir/src/](https://github.com/midnightntwrk/midnight-ledger/tree/ledger-8/zkir/src), in particular [ir.rs](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/zkir/src/ir.rs) and [ir_vm.rs](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/zkir/src/ir_vm.rs).
+**Mechanisation:** a machine-checked Agda formalisation of §4–§6 accompanies this spec in [src/zkir-v2/](../src/zkir-v2/). The preprocess semantics (§4), the constraint-emission contracts (§5.2), the producer obligations (§6.4), and — as of this draft — the faithfulness bridge **Property P5** (§6.2) are all mechanised, modulo a cryptographic trust base; see P5's status note for scope.
 **Versions covered:** ZKIR major version 2, minor versions V0 and V1. V1 is canonical; V0 is described in Appendix A.
 
 This document specifies ZKIR v2: the abstract syntax, concrete (JSON and tagged-binary) representations, the witness-population (*preprocess*) semantics, the Halo2 *circuit* semantics, the relationship between the two, the security and correctness properties expected of an implementation, and the use-case patterns that motivated the language's design.
@@ -42,7 +43,7 @@ ZKIR plays two distinct roles, both expressed by the same source:
 - as a **witness-population programme** — given a *proof preimage* (inputs, transcripts, randomness), the circuit is executed forward to populate the register file, derive the public-input vector, and verify constraint side-conditions;
 - as a **constraint-system blueprint** — the same instructions are lowered to a Halo2 constraint system whose satisfying witnesses are exactly the values populated by the first reading.
 
-The whole point of the language is that these two readings agree: the prover can succeed if and only if the witness-population programme succeeds without violating any constraint.
+The whole point of the language is that these two readings agree: the prover can succeed if and only if the witness-population programme succeeds without violating any constraint. This agreement is **Property P5** (§6.2), which is mechanised in the accompanying Agda formalisation ([src/zkir-v2/](../src/zkir-v2/)).
 
 ### 1.2 Where ZKIR sits *(informative)*
 
@@ -66,7 +67,7 @@ flowchart LR
   end
 ```
 
-The `zkir` binary ([main.rs](../../midnight-ledger/zkir/src/main.rs)) compiles a `.zkir` (JSON) or `.bzkir` (tagged binary) source into a prover/verifier key pair. At runtime the proof preimage is supplied by the protocol layer (Zswap, Dust, the contract runtime); the prover executes preprocess, hands the witness to the Halo2 backend, and produces a proof together with the public-input vector that the verifier reconstructs from the public transcript.
+The `zkir` binary ([main.rs](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/zkir/src/main.rs)) compiles a `.zkir` (JSON) or `.bzkir` (tagged binary) source into a prover/verifier key pair. At runtime the proof preimage is supplied by the protocol layer (Zswap, Dust, the contract runtime); the prover executes preprocess, hands the witness to the Halo2 backend, and produces a proof together with the public-input vector that the verifier reconstructs from the public transcript.
 
 ### 1.3 Design philosophy
 
@@ -82,7 +83,7 @@ ZKIR v2 takes a deliberately minimal, register-machine view of circuits.
 The major version is 2. Two minor versions exist:
 
 - **V0** — the original v2 release. Bit-bound constraints are enforced by explicit little-endian bit decomposition in-circuit.
-- **V1** — the current default ([IrMinorVersion::V1](../../midnight-ledger/zkir/src/ir.rs)). Functionally identical to V0 at the preprocess level (the same witnesses are produced and the same constraints are *semantically* enforced) but with optimised Halo2 lowerings for `CondSelect`, `ConstrainBits`, and `ReconstituteField`, and a larger number of `pow2range` columns. The intended correctness statement (Property P6, §6) is that the satisfying-witness sets of V0 and V1 coincide.
+- **V1** — the current default ([IrMinorVersion::V1](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/zkir/src/ir.rs)). Functionally identical to V0 at the preprocess level (the same witnesses are produced and the same constraints are *semantically* enforced) but with optimised Halo2 lowerings for `CondSelect`, `ConstrainBits`, and `ReconstituteField`, and a larger number of `pow2range` columns. The intended correctness statement (Property P6, §6) is that the satisfying-witness sets of V0 and V1 coincide.
 
 This document specifies V1. V0 differences live in [Appendix A](#appendix-a--v0-legacy-semantics).
 
@@ -111,7 +112,7 @@ IrSource = {
 }
 ```
 
-The smallest non-trivial example, drawn from [test_minimal_proof](../../midnight-ledger/zkir/tests/proofs.rs):
+The smallest non-trivial example, drawn from [test_minimal_proof](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/zkir/tests/proofs.rs):
 
 ```json
 {
@@ -181,7 +182,7 @@ A full reference is in §4.3.
 
 ### 3.1 Abstract syntax
 
-We use the following grammar. `ℕ` denotes natural numbers (the source-level `u32` and bit-counts); `Fr` denotes a BLS12-381 scalar; `Alignment` denotes a *field-aligned binary* alignment descriptor, defined externally in [base_crypto::fab](../../midnight-ledger/base-crypto/) and treated abstractly here.
+We use the following grammar. `ℕ` denotes natural numbers (the source-level `u32` and bit-counts); `Fr` denotes a BLS12-381 scalar; `Alignment` denotes a *field-aligned binary* alignment descriptor, defined externally in [base_crypto::fab](https://github.com/midnightntwrk/midnight-ledger/tree/ledger-8/base-crypto) and treated abstractly here.
 
 ```
 Index           ::= ℕ                                       — register index (u32)
@@ -224,11 +225,11 @@ Instruction     ::=
 
 ### 3.2 Concrete JSON representation
 
-`IrSource` serialises to a JSON object. The `version` field at the JSON level uses `{ "major": 2, "minor": M }`; the loader [`IrSource::load`](../../midnight-ledger/zkir/src/ir.rs) accepts `major: 2, minor ∈ {0, 1}` and normalises the value internally.
+`IrSource` serialises to a JSON object. The `version` field at the JSON level uses `{ "major": 2, "minor": M }`; the loader [`IrSource::load`](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/zkir/src/ir.rs) accepts `major: 2, minor ∈ {0, 1}` and normalises the value internally.
 
 Each instruction is tagged by an `op` field whose value is the snake-case form of the variant name. Field names match the abstract syntax. Field elements (`imm`) are encoded as lowercase little-endian hex strings, optionally prefixed with `-` to negate; trailing zero bytes are stripped.
 
-The minimal example from §2.1 is representative. A more involved one, from [zswap/output.zkir](../../midnight-ledger/zkir-precompiles/zswap/output.zkir):
+The minimal example from §2.1 is representative. A more involved one, from [zswap/output.zkir](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/zkir-precompiles/zswap/output.zkir):
 
 ```json
 { "op": "load_imm", "imm": "00" }
@@ -243,7 +244,7 @@ The minimal example from §2.1 is representative. A more involved one, from [zsw
 
 ### 3.3 Tagged binary representation
 
-For on-disk distribution, ZKIR uses a *tagged* binary format (the `.bzkir` extension) defined by the [`serialize`](../../midnight-ledger/serialize/) crate. The format prepends a structural tag so that the deserialiser can refuse to interpret data of the wrong shape.
+For on-disk distribution, ZKIR uses a *tagged* binary format (the `.bzkir` extension) defined by the [`serialize`](https://github.com/midnightntwrk/midnight-ledger/tree/ledger-8/serialize) crate. The format prepends a structural tag so that the deserialiser can refuse to interpret data of the wrong shape.
 
 The current tag for an `IrSource` is `"ir-source[v2-generic]"`. A legacy tag, `"ir-source[v2]"`, is accepted on input for V0-only sources that predate the explicit minor-version field; it is mapped to V0 (see Appendix A). On output, V0 sources are emitted under the legacy tag for binary compatibility.
 
@@ -261,9 +262,9 @@ The corresponding tags for derived artefacts are:
 
 An `IrSource` is *well-formed* iff the following structural conditions hold. They are necessary preconditions for the semantic accounts in §4 and §5 to be defined; they are *not* by themselves sufficient for preprocess success, which additionally depends on the preimage.
 
-- **WF1 — input arity.** `num_inputs` equals the length of `preimage.inputs` at runtime (this is checked dynamically in [ir_vm.rs](../../midnight-ledger/zkir/src/ir_vm.rs); the well-formed shape requires that the producer knows this length).
+- **WF1 — input arity.** `num_inputs` equals the length of `preimage.inputs` at runtime (this is checked dynamically in [ir_vm.rs](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/zkir/src/ir_vm.rs); the well-formed shape requires that the producer knows this length).
 - **WF2 — bit bounds.** Bit-count fields are bounded per-instruction. With `FR_BITS = 255` and `FR_BYTES_STORED = 31` (BLS12-381 scalar field):
-  - `ConstrainBits { bits }` and `LessThan { bits }`: `bits < FR_BITS` (i.e. `bits ≤ 254`). The Rust preprocess [helper `idx_bits`](../../midnight-ledger/zkir/src/ir_vm.rs) rejects `bits ≥ FR_BITS` with "Excessive bit bound".
+  - `ConstrainBits { bits }` and `LessThan { bits }`: `bits < FR_BITS` (i.e. `bits ≤ 254`). The Rust preprocess [helper `idx_bits`](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/zkir/src/ir_vm.rs) rejects `bits ≥ FR_BITS` with "Excessive bit bound".
   - `DivModPowerOfTwo { bits }` and `ReconstituteField { bits }`: `bits ≤ FR_BYTES_STORED · 8` (i.e. `bits ≤ 248`). The Rust preprocess rejects `bits > FR_BYTES_STORED · 8` with "Excessive bit count".
   - `ReconstituteField { bits }` additionally requires `bits ≥ 1` (otherwise the dual bound `FR_BITS - bits = FR_BITS` is excessive).
 - **WF3 — `PiSkip` discipline.** Every `DeclarePubInput` instruction must be *covered* by a subsequent `PiSkip` whose `count` accounts for it. Concretely, in the sequence of instructions, the sum of `count`s of all `PiSkip`s must equal the number of `DeclarePubInput`s, and no `PiSkip` may cover more `DeclarePubInput`s than have been emitted since the previous `PiSkip`. This is a structural condition decidable by a single linear scan over the instruction stream; the algorithm is given as producer obligation [O1](#o1--piskip-discipline) in §6.4. The runtime itself does not check WF3 directly; violations surface as transcript-mismatch failures (see §4.5).
@@ -360,7 +361,7 @@ The following table is a one-line-per-instruction summary of preconditions and e
 | `public_input(g)` | guard well-typed; `τ⁺` non-empty if active | append next of `τ⁺` (or `0` if inactive) | 1 | possibly `τ⁺ ← τ⁺[1:]` |
 | `private_input(g)` | guard well-typed; `τ⁻` non-empty if active | append next of `τ⁻` (or `0` if inactive) | 1 | possibly `τ⁻ ← τ⁻[1:]` |
 
-`H_T`, `H_P`, and `H2C` are the transient (Poseidon-based), persistent (SHA-256-based with FAB decoding), and hash-to-curve primitives from [transient_crypto::hash](../../midnight-ledger/transient-crypto/). `G` is the Jubjub group generator.
+`H_T`, `H_P`, and `H2C` are the transient (Poseidon-based), persistent (SHA-256-based with FAB decoding), and hash-to-curve primitives from [transient_crypto::hash](https://github.com/midnightntwrk/midnight-ledger/tree/ledger-8/transient-crypto). `G` is the Jubjub group generator.
 
 ### 4.4 Small-step rules
 
@@ -551,7 +552,7 @@ $$
       {P \vdash \Sigma \;\xrightarrow{\mathrm{pi\_skip}(g, n)}\; \langle M,\ \pi,\ \kappa ++ [\mathrm{none}],\ \iota,\ \tau^+,\ \tau^-,\ \omega\rangle}
 $$
 
-> **Sidebar — where `pi_skips` is consumed.** `pi_skip` does *not* modify `π` in either case, and the verifier never sees `pi_skips` at all. Verification ([`VerifierKey::verify`](../../midnight-ledger/transient-crypto/src/proofs.rs)) accepts only `(params, proof, statement: Iterator<Fr>)` and passes the full statement straight to the Halo2 backend. Soundness against the verifier therefore rests entirely on the in-circuit constraint that `DeclarePubInput` adds `M[var]` to the PI vector — both for active and skipped groups.
+> **Sidebar — where `pi_skips` is consumed.** `pi_skip` does *not* modify `π` in either case, and the verifier never sees `pi_skips` at all. Verification ([`VerifierKey::verify`](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/transient-crypto/src/proofs.rs)) accepts only `(params, proof, statement: Iterator<Fr>)` and passes the full statement straight to the Halo2 backend. Soundness against the verifier therefore rests entirely on the in-circuit constraint that `DeclarePubInput` adds `M[var]` to the PI vector — both for active and skipped groups.
 >
 > `pi_skips` is returned to the *prover-side caller* of `prove` (and to `check`) as a `Vec<Option<usize>>` of length equal to the number of `PiSkip` instructions: `None` for active groups, `Some(n)` for skipped groups of size `n`. This metadata exists to support clients (notably the Compact compiler's JS target) that build the public transcript from the same compiled circuit but need to know which groups were live in a particular execution. The active-group transcript-match check inside the active rule is then a prover-side self-check: it asserts that the prover's accumulated `π` agrees with the transcript the prover claims to be proving against, catching mis-built preimages early.
 >
@@ -687,11 +688,11 @@ flowchart TB
   SAT -->|no|  KO[Prover fails]
 ```
 
-The circuit-synthesis function takes `S` alone (no preimage) and produces a constraint system `C_S` parameterised by the public-input vector. Soundness, completeness, and zero-knowledge follow from Halo2's properties applied to `C_S` — but only relative to the bridging claim that `C_S` is *faithful* to preprocess (Property P5, §6.2).
+The circuit-synthesis function takes `S` alone (no preimage) and produces a constraint system `C_S` parameterised by the public-input vector. Soundness, completeness, and zero-knowledge follow from Halo2's properties applied to `C_S` — but only relative to the bridging claim that `C_S` is *faithful* to preprocess (Property P5, §6.2). That bridge is mechanised in Agda over an abstract clause-level model of `C_S` (see P5's status note in §6.2 for the precise statement and trust base).
 
 ### 5.2 Constraint emission contracts
 
-The Halo2 backend used is described by [`midnight_zk_stdlib`](../../midnight-ledger/) — in particular the `ZkStdLib` trait. Each instruction is lowered by [`IrSource::circuit`](../../midnight-ledger/zkir/src/ir_vm.rs) into a constraint pattern that we describe by *contract*: the variable each instruction binds, and the constraint(s) it imposes on the assigned values. We use `⟦v⟧` for the wire associated with memory cell `v`.
+The Halo2 backend used is described by [`midnight_zk_stdlib`](https://github.com/midnightntwrk/midnight-ledger/tree/ledger-8) — in particular the `ZkStdLib` trait. Each instruction is lowered by [`IrSource::circuit`](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/zkir/src/ir_vm.rs) into a constraint pattern that we describe by *contract*: the variable each instruction binds, and the constraint(s) it imposes on the assigned values. We use `⟦v⟧` for the wire associated with memory cell `v`.
 
 | Instruction | Wires bound | Constraints emitted (V1) |
 |---|---|---|
@@ -728,7 +729,7 @@ The Halo2 backend used is described by [`midnight_zk_stdlib`](../../midnight-led
 
 The Halo2 backend partitions its standard library into *chips*, each with its own column overhead. The circuit-synthesis function reports which chips it uses; this in turn drives the minimum `k` parameter (circuit row count `2^k`).
 
-The chip selection for ZKIR v2 ([`used_chips` in ir_vm.rs](../../midnight-ledger/zkir/src/ir_vm.rs)) is:
+The chip selection for ZKIR v2 ([`used_chips` in ir_vm.rs](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/zkir/src/ir_vm.rs)) is:
 
 | Chip | Enabled iff |
 |---|---|
@@ -738,7 +739,7 @@ The chip selection for ZKIR v2 ([`used_chips` in ir_vm.rs](../../midnight-ledger
 | `nr_pow2range_cols = 4` (V1; 1 for V0) | always |
 | `sha2_512`, `sha3_256`, `keccak_256`, `blake2b`, `secp256k1`, `bls12_381`, `base64`, `automaton` | never (in v2) |
 
-The minimum `k` is determined by the constraint system; the `Model` type ([`Model::k`](../../midnight-ledger/zkir/src/ir.rs)) reports it.
+The minimum `k` is determined by the constraint system; the `Model` type ([`Model::k`](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/zkir/src/ir.rs)) reports it.
 
 ### 5.4 Public-input layout
 
@@ -769,7 +770,7 @@ When `do_communications_commitment` is set, the circuit additionally enforces
 
 i.e. `π[1]` is constrained to be the Poseidon commitment of the circuit's inputs and `output`-emitted values under the randomness `comm_commitment.1`. This binds the circuit's I/O without exposing it directly in the PI vector.
 
-The same value is computed identically by both readings of the source: the preprocess side calls [`transient_commit(inputs ++ outputs, comm_commitment.1)`](../../midnight-ledger/transient-crypto/src/hash.rs), which prepends the opening randomness and applies `transient_hash` (Poseidon); the in-circuit side prepends `comm_commitment.1` explicitly and calls `std.poseidon(…)`. The two argument orders disagree on the surface but agree after `transient_commit`'s internal prepend.
+The same value is computed identically by both readings of the source: the preprocess side calls [`transient_commit(inputs ++ outputs, comm_commitment.1)`](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/transient-crypto/src/hash.rs), which prepends the opening randomness and applies `transient_hash` (Poseidon); the in-circuit side prepends `comm_commitment.1` explicitly and calls `std.poseidon(…)`. The two argument orders disagree on the surface but agree after `transient_commit`'s internal prepend.
 
 ### 5.5 Determinism of synthesis
 
@@ -779,7 +780,7 @@ The Halo2 constraint system is a *deterministic function of `S` alone*; in parti
 
 ## 6. Properties
 
-This section states the language's correctness and security properties. We distinguish *operational-level* properties — provable by induction over the preprocess rules and the Rust implementation, and which we sketch informally here — from *circuit-level* properties — which depend on the Halo2 backend and are stated as obligations rather than proved.
+This section states the language's correctness and security properties. We distinguish *operational-level* properties — provable by induction over the preprocess rules and the Rust implementation, and which we sketch informally here — from *circuit-level* properties — which depend on the Halo2 backend and are stated as obligations rather than proved here. The central bridge among them, Property P5 (§6.2), is mechanised in the accompanying Agda formalisation ([src/zkir-v2/](../src/zkir-v2/)) over an abstract model of the constraint system; the operational properties P1–P4 are likewise mechanised there.
 
 ### 6.1 Operational properties
 
@@ -800,11 +801,11 @@ This section states the language's correctness and security properties. We disti
 - the `pub_in_idx` is bounded by the number of `DeclarePubInput`s executed so far;
 - `Σ_i.ω` is in bijection with the `Output` instructions executed so far.
 
-These are routine invariants; the implementation [ir_vm.rs](../../midnight-ledger/zkir/src/ir_vm.rs) maintains them.
+These are routine invariants; the implementation [ir_vm.rs](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/zkir/src/ir_vm.rs) maintains them.
 
 ### 6.2 Circuit-level properties (obligations)
 
-These are stated as the obligations a correct implementation must discharge. They are intended to follow from Halo2's general properties (completeness, soundness, knowledge-soundness, zero-knowledge) applied to the constraint system produced in §5, *provided* the bridging property P5 holds.
+These are stated as the obligations a correct implementation must discharge. They are intended to follow from Halo2's general properties (completeness, soundness, knowledge-soundness, zero-knowledge) applied to the constraint system produced in §5, *provided* the bridging property P5 holds. Of these, P5 itself is now **mechanised in Agda** (part (a) of its status note below, over an abstract clause-level model); P6–P11 remain obligations relative to the Halo2 backend.
 
 **P5 — Preprocess–circuit faithfulness.** Let `C_S` be the Halo2 constraint system synthesised from `S` (§5). Let `Σ` range over preprocess-state-shaped assignments to the witness wires of `C_S`. Define `Σ ⊨ C_S(π)` to mean "`Σ` satisfies `C_S` with public-input vector `π`". Then for every well-formed (§3.4) and *producer-safe* (§6.4) `S` and every `P`:
 
@@ -812,7 +813,15 @@ These are stated as the obligations a correct implementation must discharge. The
 
 where `π_Σ` is the PI vector laid out by §5.4 from `Σ`. Without the producer-safety hypothesis, only the forward direction holds in general; §6.3 enumerates the lowering gaps that obligations O1–O4 close.
 
-*Status.* Postulated. The forward direction (`⇒`) corresponds to completeness of synthesis: if preprocess accepts, the synthesised constraints are satisfied. The backward direction (`⇐`) corresponds to *circuit soundness*: every Halo2-satisfying witness of a producer-safe circuit corresponds to a preprocess execution. The backward direction is the load-bearing security claim. Discharging it requires (a) showing that, *given* the producer obligations, each per-instruction circuit lowering enforces at least the preprocess preconditions, and (b) reasoning about the Halo2 chip implementations, in particular Poseidon, the Jubjub embedding, SHA-256, the range-check chips, and `assert_lower_than_fixed`.
+*Status.* **Mechanised in Agda** (part (a) below); part (b) is the trust base. The forward direction (`⇒`) corresponds to completeness of synthesis: if preprocess accepts, the synthesised constraints are satisfied. The backward direction (`⇐`) corresponds to *circuit soundness*: every satisfying witness of a producer-safe circuit corresponds to a preprocess execution — the load-bearing security claim. Discharging the bridge requires (a) showing that, *given* the producer obligations, each per-instruction circuit lowering enforces at least the preprocess preconditions, and (b) reasoning about the Halo2 chip implementations, in particular Poseidon, the Jubjub embedding, SHA-256, the range-check chips, and `assert_lower_than_fixed`.
+
+**Part (a) is mechanised.** The machine-checked theorem `circuit-faithful` in [`zkir-v2.Properties`](../src/zkir-v2/Properties.agda) (proved in [`zkir-v2.CircuitProof`](../src/zkir-v2/CircuitProof.agda)) discharges *both* directions for all 26 instructions, with no postulates beyond the trust base, over an abstract clause-level model of the constraint system (the relations `circuit`/`satisfies` of [`zkir-v2.Circuit`](../src/zkir-v2/Circuit.agda), formalising the §5.2 emission contracts) and the relational preprocess semantics `R` (the mechanised §4):
+
+> `circuit-faithful : ∀ src pre s → producer-safe src ≡ true → |inputs pre| ≡ num-inputs src → preprocess-shaped src pre s → R src pre s ⇔ satisfies (circuit src) (witness-of s pre)`
+
+It renders the "if and only if" above as a logical equivalence (Agda's `_⇔_`) — the faithful reading of "iff" between the two *propositions*; a type-isomorphism (`_↔_`) is deliberately avoided, as its round-trip laws would amount to proof-irrelevance on `R`/`satisfies` and are not what the claim requires. The two explicit hypotheses are exactly the quantifier domains named above: `|inputs pre| ≡ num-inputs src` is the input-arity well-formedness **WF1** (§3.4), and `preprocess-shaped src pre s` is the Agda realisation of "`Σ` ranges over *preprocess-state-shaped* assignments". The latter is **load-bearing for `⇐`**: because the lowerings of `public_input`/`private_input` emit no constraint (§5.2), `satisfies` cannot pin transcript-read wires, so soundness holds only for states already shaped like a preprocess run (a state arising from `R` satisfies `preprocess-shaped` automatically, via the mechanised lemma `R⇒preprocess-shaped`). Producer-safety enters as `producer-safe` (the §6.4 obligations O1–O4), supplying the gap-filling constraints of §6.3 precisely where the backward argument needs them.
+
+**Part (b) is the trust base.** The chip primitives — Poseidon (`transient_hash`/`transient_commit`), the Jubjub group operations, SHA-256, hash-to-curve — together with the field and bit-decomposition identities are *abstract postulates* in [`zkir-v2.Semantics`](../src/zkir-v2/Semantics.agda) and [`zkir-v2.CircuitFaithfulness`](../src/zkir-v2/CircuitFaithfulness.agda), and the abstract clause model stands in for the concrete PLONKish constraint system. Relating that clause model to the actual Halo2 backend, and discharging the chip-soundness assumptions, remains open.
 
 **P6 — V0/V1 functional equivalence.** Let `C^{V0}_S` and `C^{V1}_S` denote the synthesised constraint systems with `S.version = V0` and `V1` respectively. We claim: for every well-formed `S, P`, `Σ ⊨ C^{V0}_S(π_Σ)` iff `Σ ⊨ C^{V1}_S(π_Σ)`.
 
@@ -948,7 +957,7 @@ A circuit is *producer-safe* if O1, O2, and O3 (which subsumes O4) all hold. A p
 
 ### 6.5 Toward Property P5 (sketch)
 
-Property P5 — that the in-circuit constraint system's satisfying assignments coincide with reachable preprocess states — is postulated in §6.2. A full proof is the obligation of a (yet-to-be-done) mechanisation. What we *can* do here is sketch the per-instruction backward argument, taking as given the soundness of the underlying Halo2 chips.
+Property P5 — that the in-circuit constraint system's satisfying assignments coincide with reachable preprocess states — is **mechanised in Agda** (§6.2, over an abstract clause model). The per-instruction backward argument sketched below is realised there in full; we reproduce two representative cases here for intuition, taking the soundness of the underlying Halo2 chips as given (the trust base).
 
 The argument has two directions. The **forward** direction (`preprocess accepts ⇒ constraints satisfied`) is essentially completeness of the lowering: by construction, each circuit-emission contract emits constraints that the preprocess-derived values satisfy. The non-trivial direction is **backward** (`constraints satisfied ⇒ preprocess accepts`).
 
@@ -980,13 +989,15 @@ For three instructions the backward direction fails as stated and requires the p
 
 #### Outline of a full proof
 
-A full proof of P5 would proceed by induction over the instruction stream, with the inductive invariant carrying (a) point-wise equality of memory cells between the preprocess state and the in-circuit witness; (b) the well-formedness invariants of §3.4; (c) the boolean-known and bit-width-known sets of §6.4. The per-instruction case analysis then resembles the two sketches above, with the producer obligations supplying the gap-filling constraints in the three cases identified.
+A full proof of P5 proceeds by induction over the instruction stream, with the inductive invariant carrying (a) point-wise equality of memory cells between the preprocess state and the in-circuit witness; (b) the well-formedness invariants of §3.4; (c) the boolean-known and bit-width-known sets of §6.4. The per-instruction case analysis then resembles the two sketches above, with the producer obligations supplying the gap-filling constraints in the three cases identified.
+
+This is precisely the structure of the Agda mechanisation. The induction is the list-level lemma `satisfies-clauses→R-instrs` over the instruction stream, each step dispatched by the per-instruction lemma `satisfies→R-instr-step` (all 26 cases concrete); invariant (a) is threaded by the memory-/pis-prefix relation together with the `preprocess-shaped` hypothesis (which supplies the transcript-read wires that no constraint pins, §5.2); (b) by the `wire-disc` producer obligation; and (c) by the O2/O3 invariants extracted from `producer-safe`. The three gap cases (`assert`/`not` and `cond_select`'s bit; `reconstitute_field`; `less_than`) are closed there by the obligation evidence exactly as described above.
 
 ---
 
 ## 7. Use-case patterns *(informative)*
 
-This section sketches the *patterns* — not full circuits — in which ZKIR v2 is used today. Snippets are minimal and illustrative; for production examples, see [zkir-precompiles/](../../midnight-ledger/zkir-precompiles/).
+This section sketches the *patterns* — not full circuits — in which ZKIR v2 is used today. Snippets are minimal and illustrative; for production examples, see [zkir-precompiles/](https://github.com/midnightntwrk/midnight-ledger/tree/ledger-8/zkir-precompiles).
 
 ### 7.1 Hashing public state into a circuit
 
@@ -1032,7 +1043,7 @@ Two notes:
 
 ### 7.4 Persistent hashing of structured data
 
-`persistent_hash` takes an *alignment* describing how the input field elements decode into raw bytes. A common shape, taken from [zswap/output.zkir](../../midnight-ledger/zkir-precompiles/zswap/output.zkir):
+`persistent_hash` takes an *alignment* describing how the input field elements decode into raw bytes. A common shape, taken from [zswap/output.zkir](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/zkir-precompiles/zswap/output.zkir):
 
 ```json
 { "op": "persistent_hash",
@@ -1062,7 +1073,7 @@ Proving knowledge of a Jubjub discrete-log (schematic — angle-bracket placehol
 { "op": "pi_skip", "guard": null, "count": 2 }
 ```
 
-The omitted setup binds `sk` at `M[0]` (as an input) and assigns `pk_x`, `pk_y` to memory cells `<pkx>`, `<pky>` (typically via `public_input` against the transcript). The signing-style protocol is more elaborate (see [zswap/sign.zkir](../../midnight-ledger/zkir-precompiles/zswap/sign.zkir)) but the core shape is the same: multiply the generator by a private scalar, bind the result to public pk coordinates.
+The omitted setup binds `sk` at `M[0]` (as an input) and assigns `pk_x`, `pk_y` to memory cells `<pkx>`, `<pky>` (typically via `public_input` against the transcript). The signing-style protocol is more elaborate (see [zswap/sign.zkir](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/zkir-precompiles/zswap/sign.zkir)) but the core shape is the same: multiply the generator by a private scalar, bind the result to public pk coordinates.
 
 ---
 
@@ -1088,9 +1099,11 @@ V2 exposes Jubjub but not secp256k1 or BLS12-381 as embedded curves; Poseidon an
 
 There is no documented mapping from Compact source constructs to ZKIR instruction patterns. A Compact developer cannot read a `.zkir` and recognise the high-level logic. This affects auditability and reasoning.
 
-### 8.5 No formal verification
+### 8.5 Formal verification: scope and remaining gaps
 
-Until this document, ZKIR v2 had no written semantics outside its Rust implementation. Reasoning about the safety of contracts that compile to v2 required reading [ir_vm.rs](../../midnight-ledger/zkir/src/ir_vm.rs). This specification is a step toward closing that gap; a mechanised counterpart (re-doing the existing Agda work after audit) would close it further.
+Until this document, ZKIR v2 had no written semantics outside its Rust implementation. Reasoning about the safety of contracts that compile to v2 required reading [ir_vm.rs](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/zkir/src/ir_vm.rs). This specification, together with its mechanised Agda counterpart in [src/zkir-v2/](../src/zkir-v2/), closes much of that gap: the preprocess semantics (§4), the constraint-emission contracts (§5.2), the producer obligations (§6.4), and the faithfulness bridge **P5** (§6.2) are machine-checked.
+
+Two gaps remain. First, the mechanisation proves P5 against an *abstract clause-level model* of the constraint system; the chip primitives (Poseidon, Jubjub, SHA-256, hash-to-curve) and the field/bit-decomposition identities are abstract postulates, so the soundness of the actual Halo2 backend — relating the clause model to the concrete PLONKish circuit and discharging those chip assumptions — is not yet covered (part (b) of P5's status). Second, the V0/V1 equivalence **P6** is still postulated. The downstream security properties P7–P11 reduce to P5 (now mechanised, part (a)) plus the corresponding Halo2 backend properties.
 
 ---
 
@@ -1116,7 +1129,7 @@ V0 uses `nr_pow2range_cols = 1` in the Halo2 standard library architecture; V1 u
 
 ### A.5 V0 binary tag
 
-V0 sources serialise under the legacy tag `ir-source[v2]` (without the trailing `-generic`). The loader [`IrSource::load_from_tagged`](../../midnight-ledger/zkir/src/ir.rs) accepts both tags; on write, V0 is emitted under the legacy tag for binary compatibility.
+V0 sources serialise under the legacy tag `ir-source[v2]` (without the trailing `-generic`). The loader [`IrSource::load_from_tagged`](https://github.com/midnightntwrk/midnight-ledger/blob/ledger-8/zkir/src/ir.rs) accepts both tags; on write, V0 is emitted under the legacy tag for binary compatibility.
 
 ---
 
@@ -1127,9 +1140,9 @@ V0 sources serialise under the legacy tag `ir-source[v2]` (without the trailing 
 - **Halo2 / PLONKish.** The polynomial-IOP proof system Midnight uses. A constraint system is laid out as columns over `2^k` rows, with custom gates and lookups; `k` is the minimum size that fits the circuit.
 - **`ZkStdLib`.** The Rust trait (from `midnight-zk-stdlib`) that exposes Halo2 *chips* (Poseidon, Jubjub, SHA-256, range checks, etc.) as a unified API.
 - **Chip.** A reusable Halo2 sub-component implementing a specific class of constraints (e.g. the Poseidon chip; the Jubjub chip).
-- **Transient hash (`H_T`).** A Poseidon-based hash defined in [transient_crypto::hash](../../midnight-ledger/transient-crypto/). Designed for in-circuit use.
-- **Persistent hash (`H_P`).** A SHA-256-based hash defined in [base_crypto::hash](../../midnight-ledger/base-crypto/), wrapped through the FAB encoding so the input field elements decode to canonical byte sequences. Designed for binding in-circuit values to off-chain byte-serialised state.
-- **Hash-to-curve (`H2C`).** A function from field-element sequences to Jubjub points used to derive nothing-up-my-sleeve generators; implemented in [transient_crypto::hash](../../midnight-ledger/transient-crypto/).
+- **Transient hash (`H_T`).** A Poseidon-based hash defined in [transient_crypto::hash](https://github.com/midnightntwrk/midnight-ledger/tree/ledger-8/transient-crypto). Designed for in-circuit use.
+- **Persistent hash (`H_P`).** A SHA-256-based hash defined in [base_crypto::hash](https://github.com/midnightntwrk/midnight-ledger/tree/ledger-8/base-crypto), wrapped through the FAB encoding so the input field elements decode to canonical byte sequences. Designed for binding in-circuit values to off-chain byte-serialised state.
+- **Hash-to-curve (`H2C`).** A function from field-element sequences to Jubjub points used to derive nothing-up-my-sleeve generators; implemented in [transient_crypto::hash](https://github.com/midnightntwrk/midnight-ledger/tree/ledger-8/transient-crypto).
 - **FAB (Field-Aligned Binary).** The byte-alignment format described by `base_crypto::fab::Alignment`. Used by `persistent_hash` to describe how its field-element inputs decode into bytes.
 - **Binding input.** An `Fr` value supplied per-proof that becomes `π[0]`. Used to bind a proof to a transaction or context hash chosen outside the circuit.
 - **Communications commitment.** An optional `(commitment, randomness)` pair. When enabled, the circuit emits a Poseidon commitment of `(inputs ++ outputs)` under the randomness and constrains `π[1]` to equal the commitment. Used to bind multiple proofs together (e.g. composable contract calls) without exposing the I/O directly.

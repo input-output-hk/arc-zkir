@@ -1,94 +1,47 @@
-module zkir-v2.Semantics where
+{-# OPTIONS --safe #-}
+open import zkir-v2.Assumptions
 
-open import zkir-v2.Syntax
+module zkir-v2.Semantics (⋯ : _) (open Assumptions ⋯) where
+
+open import zkir-v2.Syntax ⋯
 
 open import Data.Bool    using (Bool; true; false; if_then_else_; _∧_; _∨_)
 import Data.Bool as Bool
-open import Data.List    using (List; []; _∷_; _++_; length; drop; take; reverse)
+open import Data.List    using (List; []; _∷_; _++_; length; drop; take)
 open import Data.Maybe   using (Maybe; nothing; just; _>>=_; maybe)
 open import Data.Product using (_×_; _,_; ∃)
 open import Relation.Binary.PropositionalEquality using (_≡_)
 open import Data.Nat     using (ℕ; zero; suc; _∸_; _≡ᵇ_)
 
 ------------------------------------------------------------------------
--- Postulated field and curve operations
+-- Field and curve operations, and the bit/boolean helpers `to-bool`,
+-- `fits-in`, `bits-lt`, come from the `Assumptions` parameter.
 ------------------------------------------------------------------------
-
-postulate
-  -- Field constants
-  0ᶠ 1ᶠ : Fr
-
-  -- Field arithmetic
-  _+ᶠ_ _*ᶠ_ : Fr → Fr → Fr
-  -ᶠ_         : Fr → Fr
-
-  -- Decidable field equality
-  _≡ᶠ?_ : Fr → Fr → Bool
-
-  -- Number of bits in a field element (255 for BLS12-381 scalar field)
-  FR-BITS : ℕ
-
-  -- Little-endian bit decomposition: to-le-bits x has exactly FR-BITS entries
-  to-le-bits   : Fr → List Bool
-  from-le-bits : List Bool → Fr
-
-  -- True iff the LE bit pattern represents a valid (in-range) field element
-  bits-in-field : List Bool → Bool
-
-  -- Jubjub EC operations; nothing = invalid input point(s)
-  ec-add-pts       : Fr → Fr → Fr → Fr → Maybe (Fr × Fr)
-  ec-mul-pt        : Fr → Fr → Fr → Maybe (Fr × Fr)
-  ec-mul-gen       : Fr → Fr × Fr
-  hash-to-curve-fn : List Fr → Fr × Fr
-
-  -- Hash functions
-  transient-hash-fn  : List Fr → Fr
-  persistent-hash-fn : Alignment → List Fr → Fr × Fr
-
-  -- Communications commitment: transient_commit(inputs ++ outputs, randomness)
-  transient-commit : List Fr → Fr → Fr
 
 ------------------------------------------------------------------------
 -- Utilities
 ------------------------------------------------------------------------
 
+-- `from-bool` is exported because `R-instr` constructor types
+-- (`r-test-eq`, `r-not`, `r-less-than`, …) refer to it; downstream
+-- modules need to refer to the *same* function in their proofs.
+from-bool : Bool → Fr
+from-bool false = 0ᶠ
+from-bool true  = 1ᶠ
+
 private
-  from-bool : Bool → Fr
-  from-bool false = 0ᶠ
-  from-bool true  = 1ᶠ
-
-  all-false : List Bool → Bool
-  all-false []       = true
-  all-false (b ∷ bs) = Bool.not b ∧ all-false bs
-
-  _≡ᶠ-list?_ : List Fr → List Fr → Bool
-  []       ≡ᶠ-list? []       = true
-  (x ∷ xs) ≡ᶠ-list? (y ∷ ys) = x ≡ᶠ? y ∧ xs ≡ᶠ-list? ys
-  _        ≡ᶠ-list? _        = false
-
-  -- bits-lt as bs: true iff the natural number represented by as (LE) is < that
-  -- of bs.  Assumes both lists have the same length.
-  bits-lt : List Bool → List Bool → Bool
-  bits-lt as bs = go (reverse as) (reverse bs)
-    where
-      go : List Bool → List Bool → Bool
-      go []          _           = false
-      go _           []          = false
-      go (false ∷ _) (true ∷ _) = true
-      go (true ∷ _)  (false ∷ _) = false
-      go (_ ∷ as')   (_ ∷ bs')  = go as' bs'
-
   is-empty : {A : Set} → List A → Bool
   is-empty []      = true
   is-empty (_ ∷ _) = false
 
--- Convert Fr to Bool; nothing if not in {0, 1} (UB in the IR)
-to-bool : Fr → Maybe Bool
-to-bool x with x ≡ᶠ? 0ᶠ
-... | true  = just false
-... | false with x ≡ᶠ? 1ᶠ
-...   | true  = just true
-...   | false = nothing
+-- Element-wise Fr equality on lists.  Exposed (not private) because
+-- the backward dispatcher D1 for `pi-skip` references it inside the
+-- operational side-data ADT `op-side-data` (CircuitProof.agda).  See
+-- also the prior `bits-lt` / `from-bool` exposures.
+_≡ᶠ-list?_ : List Fr → List Fr → Bool
+[]       ≡ᶠ-list? []       = true
+(x ∷ xs) ≡ᶠ-list? (y ∷ ys) = x ≡ᶠ? y ∧ xs ≡ᶠ-list? ys
+_        ≡ᶠ-list? _        = false
 
 mem-lookup : List Fr → Index → Maybe Fr
 mem-lookup []       _       = nothing
@@ -101,10 +54,6 @@ mem-lookups mem (i ∷ is) =
   mem-lookup mem i  >>= λ v  →
   mem-lookups mem is >>= λ vs →
   just (v ∷ vs)
-
--- True iff x has no bits set at positions ≥ n (i.e. x < 2^n)
-fits-in : Fr → ℕ → Bool
-fits-in x n = all-false (drop n (to-le-bits x))
 
 ------------------------------------------------------------------------
 -- Proof preimage
@@ -142,25 +91,29 @@ record Preprocessed : Set where
 -- Fails if do-communications-commitment is set but no commitment is provided.
 ------------------------------------------------------------------------
 
+-- Spec §4.2:  fail if |inputs| ≠ num-inputs (WF1 enforcement)
+-- or if do-comm is set but the preimage carries no commitment.
 init-state : IrSource → ProofPreimage → Maybe Preprocessed
 init-state src pre
-  with IrSource.do-communications-commitment src
+  with length (ProofPreimage.inputs pre) ≡ᵇ IrSource.num-inputs src
+     | IrSource.do-communications-commitment src
      | ProofPreimage.comm-commitment pre
-... | false | _            = just (mk-state
+... | false | _     | _            = nothing
+... | true  | false | _            = just (mk-state
       (ProofPreimage.inputs pre)
       (ProofPreimage.binding-input pre ∷ [])
       [] 0
       (ProofPreimage.pub-transcript-outputs pre)
       (ProofPreimage.priv-transcript pre)
       [])
-... | true  | just (c , _) = just (mk-state
+... | true  | true  | just (c , _) = just (mk-state
       (ProofPreimage.inputs pre)
       (ProofPreimage.binding-input pre ∷ c ∷ [])
       [] 0
       (ProofPreimage.pub-transcript-outputs pre)
       (ProofPreimage.priv-transcript pre)
       [])
-... | true  | nothing      = nothing
+... | true  | true  | nothing      = nothing
 
 ------------------------------------------------------------------------
 -- State helpers
